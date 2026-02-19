@@ -1,0 +1,29 @@
+﻿# Build artifacts
+**/bin/
+**/obj/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.DotSettings.user
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local settings overrides
+appsettings.Local.json
+appsettings.*.Local.json
+
+# NuGet
+*.nupkg
+packages/
