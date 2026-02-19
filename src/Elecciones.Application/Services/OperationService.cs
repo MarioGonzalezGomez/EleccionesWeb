@@ -36,6 +36,16 @@ public sealed class OperationService : IOperationService
             };
         }
 
+        var queryError = ValidateQuery(request.Query);
+        if (!string.IsNullOrEmpty(queryError))
+        {
+            return new OperationResult
+            {
+                Success = false,
+                Message = queryError
+            };
+        }
+
         if (!_lockService.IsOwner(request.Module, request.OperatorId))
         {
             return new OperationResult
@@ -46,7 +56,7 @@ public sealed class OperationService : IOperationService
         }
 
         var snapshot = await _dataService.GetSnapshotAsync(
-            request.CircunscripcionCodigo,
+            request.Query,
             request.Oficiales,
             cancellationToken);
 
@@ -75,5 +85,37 @@ public sealed class OperationService : IOperationService
         }
 
         return $"Action executed and sent to: {string.Join(", ", dispatchedTargets)}";
+    }
+
+    private static string ValidateQuery(SnapshotQuery? query)
+    {
+        if (query is null)
+        {
+            return "Query is required.";
+        }
+
+        if (query.Kind == SnapshotQueryKind.Circunscripcion
+            && string.IsNullOrWhiteSpace(query.CircunscripcionCodigo))
+        {
+            return "Circunscripcion code is required for Circunscripcion query mode.";
+        }
+
+        if (query.Kind is SnapshotQueryKind.MasVotadosProvincias or SnapshotQueryKind.PartidoProvincias)
+        {
+            if (string.IsNullOrWhiteSpace(query.AutonomiaCodigo))
+            {
+                return "Autonomia code is required for provincias query modes.";
+            }
+        }
+
+        if (query.Kind is SnapshotQueryKind.PartidoAutonomias or SnapshotQueryKind.PartidoProvincias)
+        {
+            if (string.IsNullOrWhiteSpace(query.PartidoCodigo))
+            {
+                return "Partido code is required for partido query modes.";
+            }
+        }
+
+        return string.Empty;
     }
 }

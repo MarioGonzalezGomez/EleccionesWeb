@@ -1,4 +1,5 @@
 ﻿@page "/operacion"
+@page "/operacion/{moduleHint}"
 @implements IDisposable
 @using Elecciones.Application.Abstractions
 @using Elecciones.Application.Models
@@ -18,20 +19,20 @@
 }
 
 <div class="row g-3 mb-3">
-    <div class="col-12 col-md-4">
+    <div class="col-12 col-md-3">
         <label class="form-label">Operador</label>
         <input class="form-control" @bind="operatorId" />
     </div>
-    <div class="col-12 col-md-4">
-        <label class="form-label">Circunscripcion</label>
-        <select class="form-select" @bind="selectedCircunscripcionCodigo">
-            @foreach (var circ in circunscripciones)
+    <div class="col-12 col-md-3">
+        <label class="form-label">Tipo consulta</label>
+        <select class="form-select" @bind="queryKind">
+            @foreach (var kind in Enum.GetValues<SnapshotQueryKind>())
             {
-                <option value="@circ.Codigo">@circ.Codigo - @circ.Nombre</option>
+                <option value="@kind">@kind</option>
             }
         </select>
     </div>
-    <div class="col-12 col-md-4">
+    <div class="col-12 col-md-3">
         <label class="form-label">Destino TCP</label>
         <select class="form-select" @bind="selectedTarget">
             @foreach (var target in Enum.GetValues<GraphicsTarget>())
@@ -40,23 +41,49 @@
             }
         </select>
     </div>
-</div>
-
-<div class="row g-3 mb-4">
-    <div class="col-12 col-md-4">
+    <div class="col-12 col-md-3">
         <div class="form-check mt-4">
             <input id="oficiales" class="form-check-input" type="checkbox" @bind="oficiales" />
             <label class="form-check-label" for="oficiales">Datos oficiales</label>
         </div>
     </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-12 col-md-4">
+        <label class="form-label">Circunscripcion</label>
+        <select class="form-select" @bind="selectedCircunscripcionCodigo" disabled="@(queryKind != SnapshotQueryKind.Circunscripcion)">
+            @foreach (var circ in circunscripciones)
+            {
+                <option value="@circ.Codigo">@circ.Codigo - @circ.Nombre</option>
+            }
+        </select>
+    </div>
+    <div class="col-12 col-md-4">
+        <label class="form-label">Codigo autonomia</label>
+        <input class="form-control" @bind="autonomiaCodigo" placeholder="Ej: 02" disabled="@(!RequiresAutonomia)" />
+    </div>
+    <div class="col-12 col-md-4">
+        <label class="form-label">Codigo partido</label>
+        <input class="form-control" @bind="partidoCodigo" placeholder="Ej: 00001" disabled="@(!RequiresPartido)" />
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
     <div class="col-12 col-md-8">
         <label class="form-label">Nombre CSV</label>
         <input class="form-control" @bind="exportName" />
     </div>
+    <div class="col-12 col-md-4">
+        <div class="form-check mt-4">
+            <input id="includeZero" class="form-check-input" type="checkbox" @bind="includeZeroSeats" />
+            <label class="form-check-label" for="includeZero">Incluir partidos con 0 escanos</label>
+        </div>
+    </div>
 </div>
 
 <div class="row g-4">
-    <div class="col-12 col-xl-6">
+    <div class="col-12 col-xl-5">
         <h4>Bloqueo de modulos</h4>
         <table class="table table-sm table-striped align-middle">
             <thead>
@@ -97,16 +124,31 @@
         </table>
     </div>
 
-    <div class="col-12 col-xl-6">
+    <div class="col-12 col-xl-7">
         <h4>Botonera por modulo</h4>
 
         @foreach (var module in Enum.GetValues<GraphicModule>())
         {
+            if (!ShowModule(module))
+            {
+                continue;
+            }
+
             var owned = ModuleLockService.IsOwner(module, operatorId);
             <div class="border rounded p-3 mb-3">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <strong>@module</strong>
                     <span class="badge @(owned ? "bg-success" : "bg-secondary")">@(owned ? "OWNED" : "READ ONLY")</span>
+                </div>
+
+                <div class="mb-2">
+                    <label class="form-label form-label-sm">Escena</label>
+                    <select class="form-select form-select-sm" @bind="selectedScenes[module]" disabled="@(!owned)">
+                        @foreach (var scene in GetScenes(module))
+                        {
+                            <option value="@scene">@scene</option>
+                        }
+                    </select>
                 </div>
 
                 <div class="d-flex flex-wrap gap-2">
@@ -140,11 +182,28 @@
     private IReadOnlyList<CircunscripcionSummary> circunscripciones = [];
 
     private GraphicsTarget selectedTarget = GraphicsTarget.Ipf;
+    private SnapshotQueryKind queryKind = SnapshotQueryKind.Circunscripcion;
     private string selectedCircunscripcionCodigo = string.Empty;
+    private string autonomiaCodigo = string.Empty;
+    private string partidoCodigo = string.Empty;
+    private bool includeZeroSeats;
+    private bool RequiresAutonomia => queryKind is SnapshotQueryKind.MasVotadosProvincias or SnapshotQueryKind.PartidoProvincias;
+    private bool RequiresPartido => queryKind is SnapshotQueryKind.PartidoAutonomias or SnapshotQueryKind.PartidoProvincias;
+
     private bool oficiales;
     private string exportName = "BrainStorm";
 
+    private readonly Dictionary<GraphicModule, string[]> moduleScenes = new()
+    {
+        [GraphicModule.Faldon] = ["Escrutinio", "Sondeo", "TICKER", "Pactometro", "SEDES", "CuentaAtras"],
+        [GraphicModule.Carton] = ["PARTICIPACION", "CCAA_CARTONES", "CARRUSEL", "MAYORIAS", "CARTON_PARTIDOS", "ULTIMO_ESCANO"],
+        [GraphicModule.Superfaldon] = ["SUPERFALDON", "ULTIMOESCANO", "SEDES"]
+    };
+
+    private readonly Dictionary<GraphicModule, string> selectedScenes = new();
+
     private OperationResult? lastResult;
+    [Parameter] public string? moduleHint { get; set; }
 
     protected override async Task OnInitializedAsync()
     {
@@ -153,8 +212,28 @@
 
         circunscripciones = await DataService.GetCircunscripcionesAsync();
         selectedCircunscripcionCodigo = circunscripciones.FirstOrDefault()?.Codigo ?? string.Empty;
+
+        foreach (var module in Enum.GetValues<GraphicModule>())
+        {
+            selectedScenes[module] = GetScenes(module).FirstOrDefault() ?? string.Empty;
+        }
     }
 
+    private IEnumerable<string> GetScenes(GraphicModule module)
+    {
+        return moduleScenes.TryGetValue(module, out var scenes) ? scenes : ["CONTROL"];
+    }
+
+    
+    private bool ShowModule(GraphicModule module)
+    {
+        if (string.IsNullOrWhiteSpace(moduleHint))
+        {
+            return true;
+        }
+
+        return string.Equals(moduleHint, module.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
     private bool IsMine(ModuleLockInfo state)
     {
         return state.IsLocked && string.Equals(state.Owner, operatorId, StringComparison.OrdinalIgnoreCase);
@@ -173,16 +252,29 @@
         {
             OperatorId = operatorId.Trim(),
             Module = module,
+            Scene = selectedScenes.TryGetValue(module, out var scene) ? scene : string.Empty,
             Action = action,
             Target = selectedTarget,
-            CircunscripcionCodigo = selectedCircunscripcionCodigo,
             Oficiales = oficiales,
-            ExportName = string.IsNullOrWhiteSpace(exportName) ? "BrainStorm" : exportName.Trim()
+            ExportName = string.IsNullOrWhiteSpace(exportName) ? "BrainStorm" : exportName.Trim(),
+            Query = BuildQuery()
         };
 
         lastResult = await OperationService.ExecuteAsync(request);
         feedbackMessage = lastResult.Message;
         feedbackIsError = !lastResult.Success;
+    }
+
+    private SnapshotQuery BuildQuery()
+    {
+        return new SnapshotQuery
+        {
+            Kind = queryKind,
+            CircunscripcionCodigo = selectedCircunscripcionCodigo,
+            AutonomiaCodigo = autonomiaCodigo.Trim(),
+            PartidoCodigo = partidoCodigo.Trim(),
+            IncludeZeroSeats = includeZeroSeats
+        };
     }
 
     private void Acquire(GraphicModule module)
@@ -222,3 +314,5 @@
         ModuleLockService.LocksChanged -= OnLocksChanged;
     }
 }
+
+

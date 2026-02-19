@@ -20,11 +20,12 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
     }
 
     public Task<BrainStormSnapshot> GetSnapshotAsync(
-        string circunscripcionCodigo,
+        SnapshotQuery query,
         bool oficiales,
         CancellationToken cancellationToken = default)
     {
-        var circ = Circunscripciones.FirstOrDefault(x => x.Codigo == circunscripcionCodigo) ?? Circunscripciones[0];
+        var circCode = ResolveCircCode(query);
+        var circ = Circunscripciones.FirstOrDefault(x => x.Codigo == circCode) ?? Circunscripciones[0];
 
         var seed = Math.Abs(circ.Codigo.GetHashCode());
         var baseEsc = 10 + (seed % 8);
@@ -37,6 +38,13 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
             new("004", "SUMAR", baseEsc + 1, baseEsc + 1, baseEsc + 2, baseEsc + 3, 9.4, 224500),
             new("005", "OTROS", baseEsc, baseEsc, baseEsc + 1, baseEsc, 6.3, 147800)
         };
+
+        if (!query.IncludeZeroSeats)
+        {
+            partidos = partidos
+                .Where(p => oficiales ? p.Escanios > 0 : p.EscaniosHastaSondeo > 0)
+                .ToList();
+        }
 
         var snapshot = new BrainStormSnapshot
         {
@@ -53,5 +61,18 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
         };
 
         return Task.FromResult(snapshot);
+    }
+
+    private static string ResolveCircCode(SnapshotQuery query)
+    {
+        return query.Kind switch
+        {
+            SnapshotQueryKind.Circunscripcion => string.IsNullOrWhiteSpace(query.CircunscripcionCodigo) ? "9900000" : query.CircunscripcionCodigo,
+            SnapshotQueryKind.MasVotadosAutonomias => "9900000",
+            SnapshotQueryKind.PartidoAutonomias => "9900000",
+            SnapshotQueryKind.MasVotadosProvincias or SnapshotQueryKind.PartidoProvincias
+                => string.IsNullOrWhiteSpace(query.AutonomiaCodigo) ? "0200000" : $"{query.AutonomiaCodigo}00000",
+            _ => "9900000"
+        };
     }
 }

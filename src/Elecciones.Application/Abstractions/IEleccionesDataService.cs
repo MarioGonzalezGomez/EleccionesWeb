@@ -7,7 +7,7 @@ public interface IEleccionesDataService
     Task<IReadOnlyList<CircunscripcionSummary>> GetCircunscripcionesAsync(CancellationToken cancellationToken = default);
 
     Task<BrainStormSnapshot> GetSnapshotAsync(
-        string circunscripcionCodigo,
+        SnapshotQuery query,
         bool oficiales,
         CancellationToken cancellationToken = default);
 }

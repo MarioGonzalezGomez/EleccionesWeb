@@ -13,8 +13,26 @@ Aplicacion web para operacion de graficos electorales en red con despliegue cent
 
 - Bloqueo multioperador por modulo: Faldon, Carton, Superfaldon.
 - Botonera web por modulo (PREPARA, ENTRA, ACTUALIZA, SALE, RESET) en `/operacion`.
+- Vistas por modulo: `/operacion/faldon`, `/operacion/carton`, `/operacion/superfaldon`.
 - Generacion de CSV BrainStorm en servidor.
 - Composicion de senales en formato `itemset(...)` y envio TCP a IPF/Prime.
+
+## Modos de consulta (estilo BrainStormController)
+
+Desde la UI puedes seleccionar `Tipo consulta`:
+
+- `Circunscripcion`
+- `MasVotadosAutonomias`
+- `MasVotadosProvincias`
+- `PartidoAutonomias`
+- `PartidoProvincias`
+
+Campos requeridos segun modo:
+
+- `Circunscripcion`: `CircunscripcionCodigo`
+- `MasVotadosProvincias`: `AutonomiaCodigo`
+- `PartidoAutonomias`: `PartidoCodigo`
+- `PartidoProvincias`: `AutonomiaCodigo` + `PartidoCodigo`
 
 ## Configuracion
 

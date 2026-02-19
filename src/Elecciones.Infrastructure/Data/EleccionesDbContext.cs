@@ -58,6 +58,7 @@ public sealed class EleccionesDbContext : DbContext
             entity.Property(x => x.EscaniosHastaSondeo).HasColumnName("escanos_hasta_sondeo");
             entity.Property(x => x.EscaniosHistoricos).HasColumnName("escanos_hasta_hist");
             entity.Property(x => x.Votos).HasColumnName("votos");
+            entity.Property(x => x.VotosSondeo).HasColumnName("votos_sondeo");
             entity.Property(x => x.Votantes).HasColumnName("votantes");
 
             entity

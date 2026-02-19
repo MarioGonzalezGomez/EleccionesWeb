@@ -10,6 +10,7 @@ public sealed class CircunscripcionPartidoEntity
     public int EscaniosHastaSondeo { get; set; }
     public int EscaniosHistoricos { get; set; }
     public double Votos { get; set; }
+    public double VotosSondeo { get; set; }
     public int Votantes { get; set; }
 
     public CircunscripcionEntity? Circunscripcion { get; set; }
