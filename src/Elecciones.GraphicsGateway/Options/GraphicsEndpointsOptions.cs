@@ -13,4 +13,5 @@ public sealed class GraphicsEndpointOptions
     public bool Enabled { get; set; }
     public string Host { get; set; } = "127.0.0.1";
     public int Port { get; set; }
+    public string Bd { get; set; } = "dbs1";
 }

@@ -1,5 +1,4 @@
-﻿using System.Globalization;
-using Elecciones.Application.Abstractions;
+﻿using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
 
 namespace Elecciones.Application.Services;
@@ -10,17 +9,20 @@ public sealed class OperationService : IOperationService
     private readonly IEleccionesDataService _dataService;
     private readonly IBrainStormCsvWriter _csvWriter;
     private readonly IGraphicsGateway _graphicsGateway;
+    private readonly ISignalComposer _signalComposer;
 
     public OperationService(
         IModuleLockService lockService,
         IEleccionesDataService dataService,
         IBrainStormCsvWriter csvWriter,
-        IGraphicsGateway graphicsGateway)
+        IGraphicsGateway graphicsGateway,
+        ISignalComposer signalComposer)
     {
         _lockService = lockService;
         _dataService = dataService;
         _csvWriter = csvWriter;
         _graphicsGateway = graphicsGateway;
+        _signalComposer = signalComposer;
     }
 
     public async Task<OperationResult> ExecuteAsync(OperationRequest request, CancellationToken cancellationToken = default)
@@ -50,7 +52,7 @@ public sealed class OperationService : IOperationService
 
         var csvPath = await _csvWriter.WriteAsync(snapshot, request.ExportName, cancellationToken);
 
-        var signal = BuildSignal(request, snapshot);
+        var signal = _signalComposer.Compose(request, snapshot);
         var dispatchedTargets = await _graphicsGateway.SendAsync(request.Target, signal, cancellationToken);
 
         _lockService.MarkAction(request.Module, request.OperatorId);
@@ -63,22 +65,6 @@ public sealed class OperationService : IOperationService
             Signal = signal,
             DispatchedTargets = dispatchedTargets
         };
-    }
-
-    private static string BuildSignal(OperationRequest request, BrainStormSnapshot snapshot)
-    {
-        var oficiales = request.Oficiales ? "OFICIAL" : "SONDEO";
-        var timestamp = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
-
-        return string.Join(
-            ';',
-            $"module={request.Module}",
-            $"action={request.Action}",
-            $"circ={snapshot.Circunscripcion.Codigo}",
-            $"mode={oficiales}",
-            $"avance={snapshot.Avance}",
-            $"escrutado={snapshot.Escrutado.ToString("F2", CultureInfo.InvariantCulture)}",
-            $"at={timestamp}");
     }
 
     private static string BuildResultMessage(IReadOnlyList<string> dispatchedTargets)

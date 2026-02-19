@@ -10,17 +10,50 @@
 
 <h1>Operacion multioperador</h1>
 
-<div class="mb-3">
-    <label class="form-label">Operador</label>
-    <input class="form-control" @bind="operatorId" />
-</div>
-
 @if (!string.IsNullOrWhiteSpace(feedbackMessage))
 {
     <div class="alert @(feedbackIsError ? "alert-danger" : "alert-success")" role="alert">
         @feedbackMessage
     </div>
 }
+
+<div class="row g-3 mb-3">
+    <div class="col-12 col-md-4">
+        <label class="form-label">Operador</label>
+        <input class="form-control" @bind="operatorId" />
+    </div>
+    <div class="col-12 col-md-4">
+        <label class="form-label">Circunscripcion</label>
+        <select class="form-select" @bind="selectedCircunscripcionCodigo">
+            @foreach (var circ in circunscripciones)
+            {
+                <option value="@circ.Codigo">@circ.Codigo - @circ.Nombre</option>
+            }
+        </select>
+    </div>
+    <div class="col-12 col-md-4">
+        <label class="form-label">Destino TCP</label>
+        <select class="form-select" @bind="selectedTarget">
+            @foreach (var target in Enum.GetValues<GraphicsTarget>())
+            {
+                <option value="@target">@target</option>
+            }
+        </select>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-12 col-md-4">
+        <div class="form-check mt-4">
+            <input id="oficiales" class="form-check-input" type="checkbox" @bind="oficiales" />
+            <label class="form-check-label" for="oficiales">Datos oficiales</label>
+        </div>
+    </div>
+    <div class="col-12 col-md-8">
+        <label class="form-label">Nombre CSV</label>
+        <input class="form-control" @bind="exportName" />
+    </div>
+</div>
 
 <div class="row g-4">
     <div class="col-12 col-xl-6">
@@ -65,64 +98,26 @@
     </div>
 
     <div class="col-12 col-xl-6">
-        <h4>Accion de control</h4>
+        <h4>Botonera por modulo</h4>
 
-        <div class="mb-2">
-            <label class="form-label">Modulo</label>
-            <select class="form-select" @bind="selectedModule">
-                @foreach (var module in Enum.GetValues<GraphicModule>())
-                {
-                    <option value="@module">@module</option>
-                }
-            </select>
-        </div>
+        @foreach (var module in Enum.GetValues<GraphicModule>())
+        {
+            var owned = ModuleLockService.IsOwner(module, operatorId);
+            <div class="border rounded p-3 mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <strong>@module</strong>
+                    <span class="badge @(owned ? "bg-success" : "bg-secondary")">@(owned ? "OWNED" : "READ ONLY")</span>
+                </div>
 
-        <div class="mb-2">
-            <label class="form-label">Circunscripcion</label>
-            <select class="form-select" @bind="selectedCircunscripcionCodigo">
-                @foreach (var circ in circunscripciones)
-                {
-                    <option value="@circ.Codigo">@circ.Codigo - @circ.Nombre</option>
-                }
-            </select>
-        </div>
-
-        <div class="mb-2">
-            <label class="form-label">Accion</label>
-            <select class="form-select" @bind="selectedAction">
-                @foreach (var action in Enum.GetValues<OperationActionType>())
-                {
-                    <option value="@action">@action</option>
-                }
-            </select>
-        </div>
-
-        <div class="mb-2">
-            <label class="form-label">Destino TCP</label>
-            <select class="form-select" @bind="selectedTarget">
-                @foreach (var target in Enum.GetValues<GraphicsTarget>())
-                {
-                    <option value="@target">@target</option>
-                }
-            </select>
-        </div>
-
-        <div class="form-check mb-2">
-            <input id="oficiales" class="form-check-input" type="checkbox" @bind="oficiales" />
-            <label class="form-check-label" for="oficiales">Datos oficiales</label>
-        </div>
-
-        <div class="mb-3">
-            <label class="form-label">Nombre CSV</label>
-            <input class="form-control" @bind="exportName" />
-        </div>
-
-        <button class="btn btn-primary"
-                type="button"
-                @onclick="RunActionAsync"
-                disabled="@(!CanExecute)">
-            Ejecutar
-        </button>
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-sm btn-outline-info" @onclick="() => RunQuickActionAsync(module, OperationActionType.Prepare)" disabled="@(!owned)">PREPARA</button>
+                    <button class="btn btn-sm btn-success" @onclick="() => RunQuickActionAsync(module, OperationActionType.Enter)" disabled="@(!owned)">ENTRA</button>
+                    <button class="btn btn-sm btn-primary" @onclick="() => RunQuickActionAsync(module, OperationActionType.Update)" disabled="@(!owned)">ACTUALIZA</button>
+                    <button class="btn btn-sm btn-warning" @onclick="() => RunQuickActionAsync(module, OperationActionType.Exit)" disabled="@(!owned)">SALE</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => RunQuickActionAsync(module, OperationActionType.Reset)" disabled="@(!owned)">RESET</button>
+                </div>
+            </div>
+        }
     </div>
 </div>
 
@@ -131,7 +126,8 @@
     <hr />
     <h4>Resultado</h4>
     <p><strong>CSV:</strong> @lastResult.CsvPath</p>
-    <p><strong>Signal:</strong> @lastResult.Signal</p>
+    <p><strong>Signal:</strong></p>
+    <pre class="p-2 border rounded bg-light">@lastResult.Signal</pre>
     <p><strong>Targets:</strong> @(lastResult.DispatchedTargets.Count == 0 ? "None" : string.Join(", ", lastResult.DispatchedTargets))</p>
 }
 
@@ -143,8 +139,6 @@
     private IReadOnlyList<ModuleLockInfo> moduleStates = [];
     private IReadOnlyList<CircunscripcionSummary> circunscripciones = [];
 
-    private GraphicModule selectedModule = GraphicModule.Faldon;
-    private OperationActionType selectedAction = OperationActionType.Enter;
     private GraphicsTarget selectedTarget = GraphicsTarget.Ipf;
     private string selectedCircunscripcionCodigo = string.Empty;
     private bool oficiales;
@@ -161,23 +155,25 @@
         selectedCircunscripcionCodigo = circunscripciones.FirstOrDefault()?.Codigo ?? string.Empty;
     }
 
-    private bool CanExecute =>
-        !string.IsNullOrWhiteSpace(operatorId)
-        && !string.IsNullOrWhiteSpace(selectedCircunscripcionCodigo)
-        && ModuleLockService.IsOwner(selectedModule, operatorId);
-
     private bool IsMine(ModuleLockInfo state)
     {
         return state.IsLocked && string.Equals(state.Owner, operatorId, StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task RunActionAsync()
+    private async Task RunQuickActionAsync(GraphicModule module, OperationActionType action)
     {
+        if (!ModuleLockService.IsOwner(module, operatorId))
+        {
+            feedbackMessage = $"No puedes operar {module}. Bloquealo primero con tu usuario.";
+            feedbackIsError = true;
+            return;
+        }
+
         var request = new OperationRequest
         {
             OperatorId = operatorId.Trim(),
-            Module = selectedModule,
-            Action = selectedAction,
+            Module = module,
+            Action = action,
             Target = selectedTarget,
             CircunscripcionCodigo = selectedCircunscripcionCodigo,
             Oficiales = oficiales,
@@ -193,8 +189,8 @@
     {
         var ok = ModuleLockService.TryAcquire(module, operatorId.Trim());
         feedbackMessage = ok
-            ? $"Module {module} locked by {operatorId.Trim()}."
-            : $"Cannot lock module {module}. It is owned by another operator.";
+            ? $"Modulo {module} bloqueado por {operatorId.Trim()}."
+            : $"No se puede bloquear {module}. Ya tiene owner.";
         feedbackIsError = !ok;
     }
 
@@ -202,8 +198,8 @@
     {
         var ok = ModuleLockService.Release(module, operatorId.Trim());
         feedbackMessage = ok
-            ? $"Module {module} unlocked."
-            : $"Cannot unlock module {module}. Only the owner can do it.";
+            ? $"Modulo {module} desbloqueado."
+            : $"No se puede desbloquear {module}. Solo el owner puede hacerlo.";
         feedbackIsError = !ok;
     }
 

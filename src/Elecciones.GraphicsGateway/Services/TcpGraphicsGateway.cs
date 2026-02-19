@@ -35,13 +35,15 @@ public sealed class TcpGraphicsGateway : IGraphicsGateway
 
             try
             {
+                var concreteMessage = ResolveMessageForEndpoint(message, endpoint.Bd);
+
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeoutCts.CancelAfter(TimeSpan.FromSeconds(2));
 
                 using var client = new TcpClient();
                 await client.ConnectAsync(endpoint.Host, endpoint.Port, timeoutCts.Token);
 
-                var payload = Encoding.UTF8.GetBytes(message);
+                var payload = Encoding.UTF8.GetBytes(concreteMessage);
                 await client.GetStream().WriteAsync(payload, timeoutCts.Token);
 
                 successfulTargets.Add(endpoint.Name);
@@ -60,20 +62,26 @@ public sealed class TcpGraphicsGateway : IGraphicsGateway
         return successfulTargets;
     }
 
+    private static string ResolveMessageForEndpoint(string rawMessage, string bd)
+    {
+        var selectedBd = string.IsNullOrWhiteSpace(bd) ? "dbs1" : bd.Trim();
+        return rawMessage.Replace("{BD}", selectedBd, StringComparison.OrdinalIgnoreCase);
+    }
+
     private IEnumerable<Endpoint> ResolveTargets(GraphicsTarget target)
     {
         return target switch
         {
-            GraphicsTarget.Ipf => [new Endpoint("IPF", _options.Ipf.Enabled, _options.Ipf.Host, _options.Ipf.Port)],
-            GraphicsTarget.Prime => [new Endpoint("PRIME", _options.Prime.Enabled, _options.Prime.Host, _options.Prime.Port)],
+            GraphicsTarget.Ipf => [new Endpoint("IPF", _options.Ipf.Enabled, _options.Ipf.Host, _options.Ipf.Port, _options.Ipf.Bd)],
+            GraphicsTarget.Prime => [new Endpoint("PRIME", _options.Prime.Enabled, _options.Prime.Host, _options.Prime.Port, _options.Prime.Bd)],
             GraphicsTarget.Both =>
             [
-                new Endpoint("IPF", _options.Ipf.Enabled, _options.Ipf.Host, _options.Ipf.Port),
-                new Endpoint("PRIME", _options.Prime.Enabled, _options.Prime.Host, _options.Prime.Port)
+                new Endpoint("IPF", _options.Ipf.Enabled, _options.Ipf.Host, _options.Ipf.Port, _options.Ipf.Bd),
+                new Endpoint("PRIME", _options.Prime.Enabled, _options.Prime.Host, _options.Prime.Port, _options.Prime.Bd)
             ],
             _ => []
         };
     }
 
-    private sealed record Endpoint(string Name, bool Enabled, string Host, int Port);
+    private sealed record Endpoint(string Name, bool Enabled, string Host, int Port, string Bd);
 }
