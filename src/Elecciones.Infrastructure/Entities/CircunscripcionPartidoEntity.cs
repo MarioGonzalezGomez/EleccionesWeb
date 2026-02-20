@@ -12,6 +12,8 @@ public sealed class CircunscripcionPartidoEntity
     public double Votos { get; set; }
     public double VotosSondeo { get; set; }
     public int Votantes { get; set; }
+    public int EsUltimoEscano { get; set; }
+    public int LuchaUltimoEscano { get; set; }
 
     public CircunscripcionEntity? Circunscripcion { get; set; }
     public PartidoEntity? Partido { get; set; }

@@ -10,19 +10,22 @@ public sealed class OperationService : IOperationService
     private readonly IBrainStormCsvWriter _csvWriter;
     private readonly IGraphicsGateway _graphicsGateway;
     private readonly ISignalComposer _signalComposer;
+    private readonly IOperatorAuthorizationService _authorizationService;
 
     public OperationService(
         IModuleLockService lockService,
         IEleccionesDataService dataService,
         IBrainStormCsvWriter csvWriter,
         IGraphicsGateway graphicsGateway,
-        ISignalComposer signalComposer)
+        ISignalComposer signalComposer,
+        IOperatorAuthorizationService authorizationService)
     {
         _lockService = lockService;
         _dataService = dataService;
         _csvWriter = csvWriter;
         _graphicsGateway = graphicsGateway;
         _signalComposer = signalComposer;
+        _authorizationService = authorizationService;
     }
 
     public async Task<OperationResult> ExecuteAsync(OperationRequest request, CancellationToken cancellationToken = default)
@@ -33,6 +36,16 @@ public sealed class OperationService : IOperationService
             {
                 Success = false,
                 Message = "Operator is required."
+            };
+        }
+
+        if (!_authorizationService.CanOperate(request.OperatorId, request.Module))
+        {
+            var role = _authorizationService.GetRole(request.OperatorId);
+            return new OperationResult
+            {
+                Success = false,
+                Message = $"Operator '{request.OperatorId}' with role '{role}' cannot operate module '{request.Module}'."
             };
         }
 

@@ -6,6 +6,8 @@ public sealed class OperationRequest
     public GraphicModule Module { get; init; }
     public string Scene { get; init; } = string.Empty;
     public OperationActionType Action { get; init; }
+    public GraphicCommand Command { get; init; }
+    public string CommandValue { get; init; } = string.Empty;
     public GraphicsTarget Target { get; init; }
     public bool Oficiales { get; init; }
     public string ExportName { get; init; } = "BrainStorm";

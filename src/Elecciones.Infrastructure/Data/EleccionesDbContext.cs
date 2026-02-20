@@ -12,6 +12,8 @@ public sealed class EleccionesDbContext : DbContext
     public DbSet<CircunscripcionEntity> Circunscripciones => Set<CircunscripcionEntity>();
     public DbSet<PartidoEntity> Partidos => Set<PartidoEntity>();
     public DbSet<CircunscripcionPartidoEntity> CircunscripcionPartidos => Set<CircunscripcionPartidoEntity>();
+    public DbSet<MedioEntity> Medios => Set<MedioEntity>();
+    public DbSet<MedioPartidoEntity> MedioPartidos => Set<MedioPartidoEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -60,6 +62,8 @@ public sealed class EleccionesDbContext : DbContext
             entity.Property(x => x.Votos).HasColumnName("votos");
             entity.Property(x => x.VotosSondeo).HasColumnName("votos_sondeo");
             entity.Property(x => x.Votantes).HasColumnName("votantes");
+            entity.Property(x => x.EsUltimoEscano).HasColumnName("ult_escano");
+            entity.Property(x => x.LuchaUltimoEscano).HasColumnName("sig_escano");
 
             entity
                 .HasOne(x => x.Circunscripcion)
@@ -72,6 +76,29 @@ public sealed class EleccionesDbContext : DbContext
                 .WithMany(x => x.Circunscripciones)
                 .HasForeignKey(x => x.CodPartido)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<MedioEntity>(entity =>
+        {
+            entity.ToTable("medios");
+            entity.HasKey(x => x.Codigo);
+
+            entity.Property(x => x.Codigo).HasColumnName("MEDIO");
+            entity.Property(x => x.Descripcion).HasColumnName("descripcion");
+            entity.Property(x => x.Comparar).HasColumnName("comparar");
+        });
+
+        modelBuilder.Entity<MedioPartidoEntity>(entity =>
+        {
+            entity.ToTable("medio_partido");
+            entity.HasKey(x => new { x.CodCircunscripcion, x.CodMedio, x.CodPartido });
+
+            entity.Property(x => x.CodCircunscripcion).HasColumnName("COD_CIRCUNSCRIPCION");
+            entity.Property(x => x.CodMedio).HasColumnName("COD_MEDIO");
+            entity.Property(x => x.CodPartido).HasColumnName("COD_PARTIDO");
+            entity.Property(x => x.EscaniosDesde).HasColumnName("escanos_desde");
+            entity.Property(x => x.EscaniosHasta).HasColumnName("escanos_hasta");
+            entity.Property(x => x.Votos).HasColumnName("votos");
         });
     }
 }

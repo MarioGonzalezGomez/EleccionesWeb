@@ -1,4 +1,4 @@
-﻿@page "/operacion"
+@page "/operacion"
 @page "/operacion/{moduleHint}"
 @implements IDisposable
 @using Elecciones.Application.Abstractions
@@ -6,6 +6,7 @@
 @inject IModuleLockService ModuleLockService
 @inject IOperationService OperationService
 @inject IEleccionesDataService DataService
+@inject IOperatorAuthorizationService AuthorizationService
 
 <PageTitle>Operacion</PageTitle>
 
@@ -17,6 +18,10 @@
         @feedbackMessage
     </div>
 }
+
+<div class="alert alert-info" role="alert">
+    Rol: <strong>@CurrentRole</strong> | Modulos permitidos: <strong>@AllowedModulesText</strong>
+</div>
 
 <div class="row g-3 mb-3">
     <div class="col-12 col-md-3">
@@ -70,11 +75,20 @@
 </div>
 
 <div class="row g-3 mb-4">
-    <div class="col-12 col-md-8">
+    <div class="col-12 col-md-6">
         <label class="form-label">Nombre CSV</label>
         <input class="form-control" @bind="exportName" />
     </div>
-    <div class="col-12 col-md-4">
+    <div class="col-12 col-md-3">
+        <label class="form-label">Medio sondeo</label>
+        <select class="form-select" @bind="selectedMedioCodigo" disabled="@oficiales">
+            @foreach (var medio in medios)
+            {
+                <option value="@medio.Codigo">@medio.Descripcion</option>
+            }
+        </select>
+    </div>
+    <div class="col-12 col-md-3">
         <div class="form-check mt-4">
             <input id="includeZero" class="form-check-input" type="checkbox" @bind="includeZeroSeats" />
             <label class="form-check-label" for="includeZero">Incluir partidos con 0 escanos</label>
@@ -99,6 +113,7 @@
                 @foreach (var state in moduleStates)
                 {
                     var mine = IsMine(state);
+                    var canOperate = CanOperateModule(state.Module);
                     <tr>
                         <td>@state.Module</td>
                         <td>@(state.IsLocked ? "LOCKED" : "FREE")</td>
@@ -108,13 +123,13 @@
                             <button class="btn btn-sm btn-outline-primary me-2"
                                     type="button"
                                     @onclick="() => Acquire(state.Module)"
-                                    disabled="@(state.IsLocked && !mine)">
+                                    disabled="@(!canOperate || (state.IsLocked && !mine))">
                                 Lock
                             </button>
                             <button class="btn btn-sm btn-outline-secondary"
                                     type="button"
                                     @onclick="() => Release(state.Module)"
-                                    disabled="@(!mine)">
+                                    disabled="@(!canOperate || !mine)">
                                 Unlock
                             </button>
                         </td>
@@ -134,16 +149,20 @@
                 continue;
             }
 
-            var owned = ModuleLockService.IsOwner(module, operatorId);
+            var owned = ModuleLockService.IsOwner(module, NormalizedOperatorId);
+            var canOperate = CanOperateModule(module);
+            var status = !canOperate ? "FORBIDDEN" : (owned ? "OWNED" : "READ ONLY");
+            var statusCss = !canOperate ? "bg-danger" : (owned ? "bg-success" : "bg-secondary");
+
             <div class="border rounded p-3 mb-3">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <strong>@module</strong>
-                    <span class="badge @(owned ? "bg-success" : "bg-secondary")">@(owned ? "OWNED" : "READ ONLY")</span>
+                    <span class="badge @statusCss">@status</span>
                 </div>
 
                 <div class="mb-2">
                     <label class="form-label form-label-sm">Escena</label>
-                    <select class="form-select form-select-sm" @bind="selectedScenes[module]" disabled="@(!owned)">
+                    <select class="form-select form-select-sm" @bind="selectedScenes[module]" disabled="@(!owned || !canOperate)">
                         @foreach (var scene in GetScenes(module))
                         {
                             <option value="@scene">@scene</option>
@@ -151,13 +170,35 @@
                     </select>
                 </div>
 
-                <div class="d-flex flex-wrap gap-2">
-                    <button class="btn btn-sm btn-outline-info" @onclick="() => RunQuickActionAsync(module, OperationActionType.Prepare)" disabled="@(!owned)">PREPARA</button>
-                    <button class="btn btn-sm btn-success" @onclick="() => RunQuickActionAsync(module, OperationActionType.Enter)" disabled="@(!owned)">ENTRA</button>
-                    <button class="btn btn-sm btn-primary" @onclick="() => RunQuickActionAsync(module, OperationActionType.Update)" disabled="@(!owned)">ACTUALIZA</button>
-                    <button class="btn btn-sm btn-warning" @onclick="() => RunQuickActionAsync(module, OperationActionType.Exit)" disabled="@(!owned)">SALE</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => RunQuickActionAsync(module, OperationActionType.Reset)" disabled="@(!owned)">RESET</button>
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                    <button class="btn btn-sm btn-outline-info" @onclick="() => RunQuickActionAsync(module, OperationActionType.Prepare)" disabled="@(!owned || !canOperate)">PREPARA</button>
+                    <button class="btn btn-sm btn-success" @onclick="() => RunQuickActionAsync(module, OperationActionType.Enter)" disabled="@(!owned || !canOperate)">ENTRA</button>
+                    <button class="btn btn-sm btn-primary" @onclick="() => RunQuickActionAsync(module, OperationActionType.Update)" disabled="@(!owned || !canOperate)">ACTUALIZA</button>
+                    <button class="btn btn-sm btn-warning" @onclick="() => RunQuickActionAsync(module, OperationActionType.Exit)" disabled="@(!owned || !canOperate)">SALE</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => RunQuickActionAsync(module, OperationActionType.Reset)" disabled="@(!owned || !canOperate)">RESET</button>
                 </div>
+
+                @if (GetCommands(module).Count > 0)
+                {
+                    <div class="mb-2">
+                        <label class="form-label form-label-sm">Valor comando (opcional)</label>
+                        <input class="form-control form-control-sm"
+                               @bind="commandValues[module]"
+                               placeholder="Codigo partido / valor de control"
+                               disabled="@(!owned || !canOperate)" />
+                    </div>
+
+                    <div class="d-flex flex-wrap gap-2">
+                        @foreach (var command in GetCommands(module))
+                        {
+                            <button class="btn btn-sm btn-outline-dark"
+                                    @onclick="() => RunCommandAsync(module, command)"
+                                    disabled="@(!owned || !canOperate)">
+                                @GetCommandLabel(command)
+                            </button>
+                        }
+                    </div>
+                }
             </div>
         }
     </div>
@@ -180,10 +221,12 @@
 
     private IReadOnlyList<ModuleLockInfo> moduleStates = [];
     private IReadOnlyList<CircunscripcionSummary> circunscripciones = [];
+    private IReadOnlyList<MedioSummary> medios = [new("RTVE", "RTVE")];
 
     private GraphicsTarget selectedTarget = GraphicsTarget.Ipf;
     private SnapshotQueryKind queryKind = SnapshotQueryKind.Circunscripcion;
     private string selectedCircunscripcionCodigo = string.Empty;
+    private string selectedMedioCodigo = "RTVE";
     private string autonomiaCodigo = string.Empty;
     private string partidoCodigo = string.Empty;
     private bool includeZeroSeats;
@@ -200,10 +243,57 @@
         [GraphicModule.Superfaldon] = ["SUPERFALDON", "ULTIMOESCANO", "SEDES"]
     };
 
+    private readonly Dictionary<GraphicModule, GraphicCommand[]> moduleCommands = new()
+    {
+        [GraphicModule.Faldon] =
+        [
+            GraphicCommand.TickerVotosEntra,
+            GraphicCommand.TickerVotosSale,
+            GraphicCommand.TickerHistoricosEntra,
+            GraphicCommand.TickerHistoricosSale,
+            GraphicCommand.TickerFotosEntra,
+            GraphicCommand.TickerFotosSale,
+            GraphicCommand.SedesEntra,
+            GraphicCommand.SedesEncadena,
+            GraphicCommand.SedesSale,
+            GraphicCommand.PactosEntra,
+            GraphicCommand.PactosSale,
+            GraphicCommand.PactosReinicio,
+            GraphicCommand.PactosEntraIzquierda,
+            GraphicCommand.PactosEntraDerecha,
+            GraphicCommand.PactosSaleIzquierda,
+            GraphicCommand.PactosSaleDerecha
+        ],
+        [GraphicModule.Carton] =
+        [
+            GraphicCommand.UltimoLimpiaPartidos,
+            GraphicCommand.UltimoEntraPartidoIzquierda,
+            GraphicCommand.UltimoEntraPartidoDerecha
+        ],
+        [GraphicModule.Superfaldon] =
+        [
+            GraphicCommand.SedesEntra,
+            GraphicCommand.SedesEncadena,
+            GraphicCommand.SedesSale
+        ]
+    };
+
     private readonly Dictionary<GraphicModule, string> selectedScenes = new();
+    private readonly Dictionary<GraphicModule, string> commandValues = new();
 
     private OperationResult? lastResult;
     [Parameter] public string? moduleHint { get; set; }
+
+    private string NormalizedOperatorId => operatorId.Trim();
+    private string CurrentRole => AuthorizationService.GetRole(NormalizedOperatorId);
+    private string AllowedModulesText
+    {
+        get
+        {
+            var modules = AuthorizationService.GetAllowedModules(NormalizedOperatorId);
+            return modules.Count == 0 ? "-" : string.Join(", ", modules);
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -213,10 +303,29 @@
         circunscripciones = await DataService.GetCircunscripcionesAsync();
         selectedCircunscripcionCodigo = circunscripciones.FirstOrDefault()?.Codigo ?? string.Empty;
 
+        var loadedMedios = await DataService.GetMediosAsync();
+        medios = BuildMediosForUi(loadedMedios);
+        selectedMedioCodigo = medios.FirstOrDefault()?.Codigo ?? "RTVE";
+
         foreach (var module in Enum.GetValues<GraphicModule>())
         {
             selectedScenes[module] = GetScenes(module).FirstOrDefault() ?? string.Empty;
+            commandValues[module] = string.Empty;
         }
+    }
+
+    private static IReadOnlyList<MedioSummary> BuildMediosForUi(IReadOnlyList<MedioSummary> loadedMedios)
+    {
+        var list = new List<MedioSummary> { new("RTVE", "RTVE") };
+        list.AddRange(
+            loadedMedios
+                .Where(x => !string.IsNullOrWhiteSpace(x.Codigo))
+                .Where(x => !string.Equals(x.Codigo, "RTVE", StringComparison.OrdinalIgnoreCase))
+                .DistinctBy(x => x.Codigo)
+                .Select(x => new MedioSummary(
+                    x.Codigo.Trim(),
+                    string.IsNullOrWhiteSpace(x.Descripcion) ? x.Codigo.Trim() : x.Descripcion.Trim())));
+        return list;
     }
 
     private IEnumerable<string> GetScenes(GraphicModule module)
@@ -224,7 +333,11 @@
         return moduleScenes.TryGetValue(module, out var scenes) ? scenes : ["CONTROL"];
     }
 
-    
+    private IReadOnlyList<GraphicCommand> GetCommands(GraphicModule module)
+    {
+        return moduleCommands.TryGetValue(module, out var commands) ? commands : [];
+    }
+
     private bool ShowModule(GraphicModule module)
     {
         if (string.IsNullOrWhiteSpace(moduleHint))
@@ -234,14 +347,27 @@
 
         return string.Equals(moduleHint, module.ToString(), StringComparison.OrdinalIgnoreCase);
     }
+
+    private bool CanOperateModule(GraphicModule module)
+    {
+        return AuthorizationService.CanOperate(NormalizedOperatorId, module);
+    }
+
     private bool IsMine(ModuleLockInfo state)
     {
-        return state.IsLocked && string.Equals(state.Owner, operatorId, StringComparison.OrdinalIgnoreCase);
+        return state.IsLocked && string.Equals(state.Owner, NormalizedOperatorId, StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task RunQuickActionAsync(GraphicModule module, OperationActionType action)
     {
-        if (!ModuleLockService.IsOwner(module, operatorId))
+        if (!CanOperateModule(module))
+        {
+            feedbackMessage = $"No tienes permisos para operar el modulo {module}.";
+            feedbackIsError = true;
+            return;
+        }
+
+        if (!ModuleLockService.IsOwner(module, NormalizedOperatorId))
         {
             feedbackMessage = $"No puedes operar {module}. Bloquealo primero con tu usuario.";
             feedbackIsError = true;
@@ -250,16 +376,55 @@
 
         var request = new OperationRequest
         {
-            OperatorId = operatorId.Trim(),
+            OperatorId = NormalizedOperatorId,
             Module = module,
             Scene = selectedScenes.TryGetValue(module, out var scene) ? scene : string.Empty,
             Action = action,
+            Command = GraphicCommand.None,
             Target = selectedTarget,
             Oficiales = oficiales,
             ExportName = string.IsNullOrWhiteSpace(exportName) ? "BrainStorm" : exportName.Trim(),
             Query = BuildQuery()
         };
 
+        await ExecuteAsync(request);
+    }
+
+    private async Task RunCommandAsync(GraphicModule module, GraphicCommand command)
+    {
+        if (!CanOperateModule(module))
+        {
+            feedbackMessage = $"No tienes permisos para operar el modulo {module}.";
+            feedbackIsError = true;
+            return;
+        }
+
+        if (!ModuleLockService.IsOwner(module, NormalizedOperatorId))
+        {
+            feedbackMessage = $"No puedes operar {module}. Bloquealo primero con tu usuario.";
+            feedbackIsError = true;
+            return;
+        }
+
+        var request = new OperationRequest
+        {
+            OperatorId = NormalizedOperatorId,
+            Module = module,
+            Scene = selectedScenes.TryGetValue(module, out var scene) ? scene : string.Empty,
+            Action = OperationActionType.Update,
+            Command = command,
+            CommandValue = commandValues.TryGetValue(module, out var value) ? value.Trim() : string.Empty,
+            Target = selectedTarget,
+            Oficiales = oficiales,
+            ExportName = string.IsNullOrWhiteSpace(exportName) ? "BrainStorm" : exportName.Trim(),
+            Query = BuildQuery()
+        };
+
+        await ExecuteAsync(request);
+    }
+
+    private async Task ExecuteAsync(OperationRequest request)
+    {
         lastResult = await OperationService.ExecuteAsync(request);
         feedbackMessage = lastResult.Message;
         feedbackIsError = !lastResult.Success;
@@ -273,26 +438,63 @@
             CircunscripcionCodigo = selectedCircunscripcionCodigo,
             AutonomiaCodigo = autonomiaCodigo.Trim(),
             PartidoCodigo = partidoCodigo.Trim(),
-            IncludeZeroSeats = includeZeroSeats
+            IncludeZeroSeats = includeZeroSeats,
+            MedioCodigo = selectedMedioCodigo.Trim()
         };
     }
 
     private void Acquire(GraphicModule module)
     {
-        var ok = ModuleLockService.TryAcquire(module, operatorId.Trim());
+        if (!CanOperateModule(module))
+        {
+            feedbackMessage = $"No tienes permisos para bloquear el modulo {module}.";
+            feedbackIsError = true;
+            return;
+        }
+
+        var owner = NormalizedOperatorId;
+        var ok = ModuleLockService.TryAcquire(module, owner);
         feedbackMessage = ok
-            ? $"Modulo {module} bloqueado por {operatorId.Trim()}."
+            ? $"Modulo {module} bloqueado por {owner}."
             : $"No se puede bloquear {module}. Ya tiene owner.";
         feedbackIsError = !ok;
     }
 
     private void Release(GraphicModule module)
     {
-        var ok = ModuleLockService.Release(module, operatorId.Trim());
+        var owner = NormalizedOperatorId;
+        var ok = ModuleLockService.Release(module, owner);
         feedbackMessage = ok
             ? $"Modulo {module} desbloqueado."
             : $"No se puede desbloquear {module}. Solo el owner puede hacerlo.";
         feedbackIsError = !ok;
+    }
+
+    private static string GetCommandLabel(GraphicCommand command)
+    {
+        return command switch
+        {
+            GraphicCommand.TickerVotosEntra => "Ticker Votos Entra",
+            GraphicCommand.TickerVotosSale => "Ticker Votos Sale",
+            GraphicCommand.TickerHistoricosEntra => "Ticker Historicos Entra",
+            GraphicCommand.TickerHistoricosSale => "Ticker Historicos Sale",
+            GraphicCommand.TickerFotosEntra => "Ticker Fotos Entra",
+            GraphicCommand.TickerFotosSale => "Ticker Fotos Sale",
+            GraphicCommand.SedesEntra => "Sedes Entra",
+            GraphicCommand.SedesEncadena => "Sedes Encadena",
+            GraphicCommand.SedesSale => "Sedes Sale",
+            GraphicCommand.PactosEntra => "Pactos Entra",
+            GraphicCommand.PactosSale => "Pactos Sale",
+            GraphicCommand.PactosReinicio => "Pactos Reinicio",
+            GraphicCommand.PactosEntraIzquierda => "Pactos Entra Izq",
+            GraphicCommand.PactosEntraDerecha => "Pactos Entra Der",
+            GraphicCommand.PactosSaleIzquierda => "Pactos Sale Izq",
+            GraphicCommand.PactosSaleDerecha => "Pactos Sale Der",
+            GraphicCommand.UltimoLimpiaPartidos => "Ultimo Limpia",
+            GraphicCommand.UltimoEntraPartidoIzquierda => "Ultimo Entra Izq",
+            GraphicCommand.UltimoEntraPartidoDerecha => "Ultimo Entra Der",
+            _ => command.ToString()
+        };
     }
 
     private void OnLocksChanged()
@@ -314,5 +516,3 @@
         ModuleLockService.LocksChanged -= OnLocksChanged;
     }
 }
-
-

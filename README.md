@@ -13,9 +13,11 @@ Aplicacion web para operacion de graficos electorales en red con despliegue cent
 
 - Bloqueo multioperador por modulo: Faldon, Carton, Superfaldon.
 - Botonera web por modulo (PREPARA, ENTRA, ACTUALIZA, SALE, RESET) en `/operacion`.
+- Botones de comandos especificos por modulo (Ticker/Sedes/Pactos/Ultimo) con `GraphicCommand`.
 - Vistas por modulo: `/operacion/faldon`, `/operacion/carton`, `/operacion/superfaldon`.
 - Generacion de CSV BrainStorm en servidor.
 - Composicion de senales en formato `itemset(...)` y envio TCP a IPF/Prime.
+- Permisos por operador/modulo configurables en `OperatorAuthorization`.
 
 ## Modos de consulta (estilo BrainStormController)
 
@@ -54,6 +56,29 @@ Archivo principal: `src/Elecciones.Web/appsettings.json`
 - `GraphicsEndpoints:Prime:Enabled`, `Host`, `Port`, `Bd`.
 
 `Bd` se usa para resolver el placeholder `{BD}` en las senales `itemset`.
+
+### OperatorAuthorization
+
+- `OperatorAuthorization:AllowAllWhenEmpty`: si es `true`, sin operadores configurados todos operan todo.
+- `OperatorAuthorization:Operators`: lista de operadores con rol y modulos permitidos.
+
+Ejemplo:
+
+```json
+"OperatorAuthorization": {
+  "AllowAllWhenEmpty": false,
+  "Operators": [
+    { "OperatorId": "operador_faldon", "Role": "faldon", "Modules": [ "Faldon" ] },
+    { "OperatorId": "operador_carton", "Role": "carton", "Modules": [ "Carton" ] }
+  ]
+}
+```
+
+### Medio de sondeo
+
+- En modo no oficial, la UI permite elegir `Medio sondeo`.
+- `RTVE` deja los datos base de sondeo.
+- Si se selecciona otro medio, se aplica overlay desde la tabla `medio_partido` (por circunscripcion+partido).
 
 ## Ejecucion local
 

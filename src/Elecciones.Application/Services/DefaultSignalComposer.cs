@@ -8,8 +8,6 @@ public sealed class DefaultSignalComposer : ISignalComposer
     public string Compose(OperationRequest request, BrainStormSnapshot snapshot)
     {
         var scene = ResolveScene(request);
-        var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
-        var eventPath = ResolveEventPath(scene, request.Action);
 
         var lines = new List<string>
         {
@@ -17,6 +15,21 @@ public sealed class DefaultSignalComposer : ISignalComposer
             $"itemset('<{{BD}}>META/MODE','{(request.Oficiales ? "OFICIAL" : "SONDEO")}');",
             $"itemset('<{{BD}}>META/AVANCE','{snapshot.Avance}');"
         };
+
+        if (request.Action == OperationActionType.Reset)
+        {
+            lines.Add(EventRun("RESET"));
+            return string.Join("\n", lines);
+        }
+
+        if (request.Command != GraphicCommand.None)
+        {
+            lines.AddRange(ResolveCommandLines(request));
+            return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
+        var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
+        var eventPath = ResolveEventPath(scene, request.Action);
 
         if (NeedsCodeReload(scene, request.Action))
         {
@@ -28,15 +41,9 @@ public sealed class DefaultSignalComposer : ISignalComposer
             lines.Add("itemset('<{BD}>UltimoEscanoCSV','MAP_LLSTRING_LOAD');");
         }
 
-        if (request.Action == OperationActionType.Reset)
-        {
-            lines.Add("itemset('<{BD}>RESET','EVENT_RUN');");
-            return string.Join("\n", lines);
-        }
-
         if (!string.IsNullOrWhiteSpace(eventPath))
         {
-            lines.Add($"itemset('<{{BD}}>{eventPath}','EVENT_RUN');");
+            lines.Add(EventRun(eventPath));
         }
 
         return string.Join("\n", lines);
@@ -141,5 +148,122 @@ public sealed class DefaultSignalComposer : ISignalComposer
             OperationActionType.Exit => $"{scene}/SALE",
             _ => string.Empty
         };
+    }
+
+    private static IEnumerable<string> ResolveCommandLines(OperationRequest request)
+    {
+        return request.Command switch
+        {
+            GraphicCommand.TickerVotosEntra =>
+            [
+                MapString("Datos", "DiferenciaSale"),
+                MapString("Datos", "PorcentajitoEntra")
+            ],
+            GraphicCommand.TickerVotosSale =>
+            [
+                MapString("Datos", "PorcentajitoSale"),
+                MapString("Datos", "DiferenciaEntra")
+            ],
+            GraphicCommand.TickerHistoricosEntra =>
+            [
+                MapString("Datos", "PorcentajitoSale"),
+                MapString("Datos", "DiferenciaEntra")
+            ],
+            GraphicCommand.TickerHistoricosSale =>
+            [
+                EventRun(request.Oficiales ? "TICKER/HISTORICOS/SALE" : "TICKER_SONDEO/HISTORICOS/SALE")
+            ],
+            GraphicCommand.TickerFotosEntra => [EventRun("EntraFoto")],
+            GraphicCommand.TickerFotosSale => [EventRun("SaleFoto")],
+
+            GraphicCommand.SedesEntra => BuildSedesLines("SEDES/ENTRA", request.CommandValue),
+            GraphicCommand.SedesEncadena => BuildSedesLines("SEDES/ENCADENA", request.CommandValue),
+            GraphicCommand.SedesSale => [EventRun("SEDES/SALE")],
+
+            GraphicCommand.PactosEntra => [EventRun("Pactometro/Entra")],
+            GraphicCommand.PactosSale =>
+            [
+                EventRun("Pactometro/Sale"),
+                EventRun("Pactometro/reinicioPactometroIzq"),
+                EventRun("Pactometro/reinicioPactometroDer")
+            ],
+            GraphicCommand.PactosReinicio =>
+            [
+                EventRun("Pactometro/reinicioPactometroIzq"),
+                EventRun("Pactometro/reinicioPactometroDer")
+            ],
+            GraphicCommand.PactosEntraIzquierda =>
+            [
+                TryMapString("Pactometro/PartidoIzq", request.CommandValue),
+                EventRun("Pactometro/lanzaPactometroIzq")
+            ],
+            GraphicCommand.PactosEntraDerecha =>
+            [
+                TryMapString("Pactometro/PartidoDer", request.CommandValue),
+                EventRun("Pactometro/lanzaPactometroDer")
+            ],
+            GraphicCommand.PactosSaleIzquierda =>
+            [
+                "itemset('<{BD}>Graficos/Pactometro/Izq/LogosIzq','OBJ_GRID_JUMP_PREV');"
+            ],
+            GraphicCommand.PactosSaleDerecha =>
+            [
+                "itemset('<{BD}>Graficos/Pactometro/Der/LogosDer','OBJ_GRID_JUMP_PREV');"
+            ],
+
+            GraphicCommand.UltimoLimpiaPartidos =>
+            [
+                EventRun("ULTIMO_ESCANO/SALE_BARRAS")
+            ],
+            GraphicCommand.UltimoEntraPartidoIzquierda =>
+            [
+                TryMapString("ULTIMO_ESCANO/PARTIDO_IZQ", request.CommandValue),
+                EventRun("ULTIMO_ESCANO/ENTRA_PARTIDO_IZQ")
+            ],
+            GraphicCommand.UltimoEntraPartidoDerecha =>
+            [
+                TryMapString("ULTIMO_ESCANO/PARTIDO_DER", request.CommandValue),
+                EventRun("ULTIMO_ESCANO/ENTRA_PARTIDO_DER")
+            ],
+
+            _ => []
+        };
+    }
+
+    private static IEnumerable<string> BuildSedesLines(string eventPath, string commandValue)
+    {
+        if (string.IsNullOrWhiteSpace(commandValue))
+        {
+            return [EventRun(eventPath)];
+        }
+
+        return
+        [
+            MapString("SEDES/PARTIDO", commandValue),
+            EventRun(eventPath)
+        ];
+    }
+
+    private static string EventRun(string path)
+    {
+        return $"itemset('<{{BD}}>{path}','EVENT_RUN');";
+    }
+
+    private static string MapString(string path, string value)
+    {
+        return $"itemset('<{{BD}}>{path}','MAP_STRING_PAR','{EscapeValue(value)}');";
+    }
+
+    private static string TryMapString(string path, string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? string.Empty : MapString(path, value);
+    }
+
+    private static string EscapeValue(string value)
+    {
+        return value
+            .Trim()
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("'", "\\'", StringComparison.Ordinal);
     }
 }

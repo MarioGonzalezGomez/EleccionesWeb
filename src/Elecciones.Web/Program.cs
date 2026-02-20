@@ -6,6 +6,7 @@ using Elecciones.Infrastructure.Data;
 using Elecciones.Infrastructure.Options;
 using Elecciones.Infrastructure.Services;
 using EleccionesWeb.Components;
+using EleccionesWeb.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -45,6 +46,7 @@ else
 }
 
 builder.Services.AddSingleton<IModuleLockService, ModuleLockService>();
+builder.Services.AddSingleton<IOperatorAuthorizationService, ConfiguredOperatorAuthorizationService>();
 builder.Services.AddSingleton<ISignalComposer, DefaultSignalComposer>();
 builder.Services.AddSingleton<IBrainStormCsvWriter, FileBrainStormCsvWriter>();
 builder.Services.AddSingleton<IGraphicsGateway, TcpGraphicsGateway>();

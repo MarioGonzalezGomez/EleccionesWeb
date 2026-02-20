@@ -34,6 +34,23 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         return data;
     }
 
+    public async Task<IReadOnlyList<MedioSummary>> GetMediosAsync(CancellationToken cancellationToken = default)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var data = await db.Medios
+            .AsNoTracking()
+            .Where(x => !string.IsNullOrWhiteSpace(x.Codigo))
+            .OrderBy(x => x.Descripcion)
+            .ThenBy(x => x.Codigo)
+            .Select(x => new MedioSummary(
+                x.Codigo,
+                string.IsNullOrWhiteSpace(x.Descripcion) ? x.Codigo : x.Descripcion))
+            .ToListAsync(cancellationToken);
+
+        return data;
+    }
+
     public async Task<BrainStormSnapshot> GetSnapshotAsync(
         SnapshotQuery query,
         bool oficiales,
@@ -57,6 +74,11 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             SnapshotQueryKind.PartidoProvincias => await GetPartidoProvinciasAsync(baseQuery, query.AutonomiaCodigo, query.PartidoCodigo, oficiales, cancellationToken),
             _ => await GetCircunscripcionAsync(baseQuery, query.CircunscripcionCodigo, oficiales, query.IncludeZeroSeats, cancellationToken)
         };
+
+        if (!oficiales && !string.IsNullOrWhiteSpace(query.MedioCodigo) && !IsRtve(query.MedioCodigo))
+        {
+            await ApplyMedioSondeoOverlayAsync(db, cps, query.MedioCodigo.Trim(), cancellationToken);
+        }
 
         var contextCirc = await ResolveContextCircunscripcionAsync(db, query, cps, cancellationToken);
         var partidos = BuildPartidoSnapshots(cps, query, oficiales, query.IncludeZeroSeats);
@@ -273,5 +295,58 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         if (circ.Avance2 > 0) return 2;
         if (circ.Avance1 > 0) return 1;
         return 0;
+    }
+
+    private static bool IsRtve(string medioCodigo)
+    {
+        return string.Equals(medioCodigo.Trim(), "RTVE", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task ApplyMedioSondeoOverlayAsync(
+        EleccionesDbContext db,
+        List<CircunscripcionPartidoEntity> cps,
+        string medioCodigo,
+        CancellationToken cancellationToken)
+    {
+        if (cps.Count == 0)
+        {
+            return;
+        }
+
+        var circCodes = cps
+            .Select(x => x.CodCircunscripcion)
+            .Distinct()
+            .ToList();
+
+        var partidoCodes = cps
+            .Select(x => x.CodPartido)
+            .Distinct()
+            .ToList();
+
+        var overlays = await db.MedioPartidos
+            .AsNoTracking()
+            .Where(x => x.CodMedio == medioCodigo)
+            .Where(x => circCodes.Contains(x.CodCircunscripcion))
+            .Where(x => partidoCodes.Contains(x.CodPartido))
+            .ToListAsync(cancellationToken);
+
+        var overlayMap = overlays.ToDictionary(
+            x => (x.CodCircunscripcion, x.CodPartido),
+            x => x);
+
+        foreach (var cp in cps)
+        {
+            if (overlayMap.TryGetValue((cp.CodCircunscripcion, cp.CodPartido), out var overlay))
+            {
+                cp.EscaniosDesdeSondeo = overlay.EscaniosDesde;
+                cp.EscaniosHastaSondeo = overlay.EscaniosHasta;
+                cp.VotosSondeo = overlay.Votos;
+                continue;
+            }
+
+            cp.EscaniosDesdeSondeo = 0;
+            cp.EscaniosHastaSondeo = 0;
+            cp.VotosSondeo = 0;
+        }
     }
 }

@@ -14,9 +14,21 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
         new("4100000", "Sevilla")
     ];
 
+    private static readonly IReadOnlyList<MedioSummary> Medios =
+    [
+        new("RTVE", "RTVE"),
+        new("MED01", "Sondeo Medio 1"),
+        new("MED02", "Sondeo Medio 2")
+    ];
+
     public Task<IReadOnlyList<CircunscripcionSummary>> GetCircunscripcionesAsync(CancellationToken cancellationToken = default)
     {
         return Task.FromResult(Circunscripciones);
+    }
+
+    public Task<IReadOnlyList<MedioSummary>> GetMediosAsync(CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(Medios);
     }
 
     public Task<BrainStormSnapshot> GetSnapshotAsync(
@@ -38,6 +50,12 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
             new("004", "SUMAR", baseEsc + 1, baseEsc + 1, baseEsc + 2, baseEsc + 3, 9.4, 224500),
             new("005", "OTROS", baseEsc, baseEsc, baseEsc + 1, baseEsc, 6.3, 147800)
         };
+
+        if (!oficiales && !string.IsNullOrWhiteSpace(query.MedioCodigo) && !IsRtve(query.MedioCodigo))
+        {
+            var variant = Math.Abs(query.MedioCodigo.Trim().GetHashCode()) % 3;
+            partidos = ApplySondeoVariant(partidos, variant);
+        }
 
         if (!query.IncludeZeroSeats)
         {
@@ -74,5 +92,39 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
                 => string.IsNullOrWhiteSpace(query.AutonomiaCodigo) ? "0200000" : $"{query.AutonomiaCodigo}00000",
             _ => "9900000"
         };
+    }
+
+    private static bool IsRtve(string medioCodigo)
+    {
+        return string.Equals(medioCodigo.Trim(), "RTVE", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<PartidoSnapshot> ApplySondeoVariant(List<PartidoSnapshot> partidos, int variant)
+    {
+        if (variant == 0)
+        {
+            return partidos;
+        }
+
+        var adjusted = new List<PartidoSnapshot>(partidos.Count);
+        for (var i = 0; i < partidos.Count; i++)
+        {
+            var partido = partidos[i];
+            var offset = ((i + variant) % 2 == 0) ? 1 : -1;
+            var nuevoHasta = Math.Max(0, partido.EscaniosHastaSondeo + offset);
+            var nuevoDesde = Math.Max(0, partido.EscaniosDesdeSondeo + (offset > 0 ? 0 : -offset));
+
+            adjusted.Add(partido with
+            {
+                EscaniosHastaSondeo = nuevoHasta,
+                EscaniosDesdeSondeo = nuevoDesde
+            });
+        }
+
+        return adjusted
+            .OrderByDescending(x => x.EscaniosHastaSondeo)
+            .ThenByDescending(x => x.EscaniosDesdeSondeo)
+            .ThenByDescending(x => x.PorcentajeVoto)
+            .ToList();
     }
 }

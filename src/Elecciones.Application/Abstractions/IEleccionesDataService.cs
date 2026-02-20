@@ -6,6 +6,8 @@ public interface IEleccionesDataService
 {
     Task<IReadOnlyList<CircunscripcionSummary>> GetCircunscripcionesAsync(CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<MedioSummary>> GetMediosAsync(CancellationToken cancellationToken = default);
+
     Task<BrainStormSnapshot> GetSnapshotAsync(
         SnapshotQuery query,
         bool oficiales,
