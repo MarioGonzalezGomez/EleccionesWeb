@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.Linq;
 using System.Text;
 using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
@@ -55,6 +56,39 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
 
     private static string BuildCsv(BrainStormSnapshot snapshot)
     {
+        var partidosActuales = snapshot.Partidos
+            .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
+            .OrderBy(p => p.Codigo, StringComparer.Ordinal)
+            .ToList();
+
+        var plantilla = snapshot.CsvTemplatePartidos.Count > 0
+            ? snapshot.CsvTemplatePartidos
+                .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
+                .OrderBy(p => p.Codigo, StringComparer.Ordinal)
+                .ToList()
+            : partidosActuales;
+
+        var actualesPorCodigo = partidosActuales
+            .GroupBy(p => p.Codigo, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+
+        var codigosPlantilla = new HashSet<string>(StringComparer.Ordinal);
+        var filasCsv = new List<PartidoSnapshot?>(plantilla.Count);
+
+        foreach (var partidoPlantilla in plantilla)
+        {
+            codigosPlantilla.Add(partidoPlantilla.Codigo);
+            filasCsv.Add(actualesPorCodigo.TryGetValue(partidoPlantilla.Codigo, out var actual) ? actual : null);
+        }
+
+        foreach (var partidoActual in partidosActuales)
+        {
+            if (!codigosPlantilla.Contains(partidoActual.Codigo))
+            {
+                filasCsv.Add(partidoActual);
+            }
+        }
+
         var sb = new StringBuilder();
 
         sb.AppendLine("Codigo;Nombre;Escrutado;Escanios;Mayoria;Avance;Votantes;UltimasElecciones;NumeroPartidos");
@@ -66,13 +100,19 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
             .Append(snapshot.Avance).Append(';')
             .Append(snapshot.VotantesTotales).Append(';')
             .Append(snapshot.AnioUltimasElecciones).Append(';')
-            .Append(snapshot.Partidos.Count)
+            .Append(filasCsv.Count)
             .AppendLine();
 
         sb.AppendLine("Codigo;Siglas;Escanios;DesdeSondeo;HastaSondeo;Historicos;PorcentajeVoto;Votos");
 
-        foreach (var partido in snapshot.Partidos)
+        foreach (var partido in filasCsv)
         {
+            if (partido is null)
+            {
+                sb.AppendLine(";;;;;;;");
+                continue;
+            }
+
             sb.Append(partido.Codigo).Append(';')
                 .Append(partido.Siglas).Append(';')
                 .Append(partido.Escanios).Append(';')

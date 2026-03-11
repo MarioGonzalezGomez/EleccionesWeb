@@ -82,6 +82,12 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
 
         var contextCirc = await ResolveContextCircunscripcionAsync(db, query, cps, cancellationToken);
         var partidos = BuildPartidoSnapshots(cps, query, oficiales, query.IncludeZeroSeats);
+        var csvTemplatePartidos = await ResolveCsvTemplatePartidosAsync(
+            db,
+            query,
+            contextCirc,
+            oficiales,
+            cancellationToken);
 
         _logger.LogDebug(
             "Snapshot loaded from MySQL. Kind={Kind}, Circ={Circ}, Count={Count}",
@@ -100,7 +106,8 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             VotantesTotales = contextCirc.Votantes,
             AnioUltimasElecciones = DateTime.UtcNow.Year - 3,
             GeneratedAtUtc = DateTime.UtcNow,
-            Partidos = partidos
+            Partidos = partidos,
+            CsvTemplatePartidos = csvTemplatePartidos
         };
     }
 
@@ -287,6 +294,71 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         }
 
         return await db.Circunscripciones.AsNoTracking().OrderBy(x => x.Nombre).FirstAsync(cancellationToken);
+    }
+
+    private static async Task<IReadOnlyList<PartidoSnapshot>> ResolveCsvTemplatePartidosAsync(
+        EleccionesDbContext db,
+        SnapshotQuery query,
+        CircunscripcionEntity contextCirc,
+        bool oficiales,
+        CancellationToken cancellationToken)
+    {
+        if (query.Kind != SnapshotQueryKind.Circunscripcion)
+        {
+            return [];
+        }
+
+        var contextCode = contextCirc.Codigo?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(contextCode))
+        {
+            return [];
+        }
+
+        // Si ya estamos en la circunscripcion general, no hace falta plantilla adicional.
+        if (contextCode.EndsWith("00000", StringComparison.Ordinal))
+        {
+            return [];
+        }
+
+        var candidateTemplateCodes = new List<string>();
+        var comunidad = contextCirc.Comunidad?.Trim() ?? string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(comunidad))
+        {
+            candidateTemplateCodes.Add($"{comunidad}00000");
+        }
+
+        candidateTemplateCodes.Add("9900000");
+
+        foreach (var templateCode in candidateTemplateCodes.Distinct(StringComparer.Ordinal))
+        {
+            var cpsPlantilla = await db.CircunscripcionPartidos
+                .AsNoTracking()
+                .Include(x => x.Partido)
+                .Where(x => x.CodCircunscripcion == templateCode)
+                .ToListAsync(cancellationToken);
+
+            if (cpsPlantilla.Count == 0)
+            {
+                continue;
+            }
+
+            var partidosPlantilla = BuildPartidoSnapshots(
+                    OrderCpList(cpsPlantilla, oficiales),
+                    new SnapshotQuery { Kind = SnapshotQueryKind.Circunscripcion, IncludeZeroSeats = true },
+                    oficiales,
+                    includeZeroSeats: true)
+                .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
+                .OrderBy(p => p.Codigo, StringComparer.Ordinal)
+                .ToList();
+
+            if (partidosPlantilla.Count > 0)
+            {
+                return partidosPlantilla;
+            }
+        }
+
+        return [];
     }
 
     private static int ResolveAvance(CircunscripcionEntity circ)

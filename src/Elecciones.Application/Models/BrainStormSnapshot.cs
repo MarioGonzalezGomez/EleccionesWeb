@@ -12,4 +12,5 @@ public sealed class BrainStormSnapshot
     public int AnioUltimasElecciones { get; init; }
     public DateTime GeneratedAtUtc { get; init; } = DateTime.UtcNow;
     public IReadOnlyList<PartidoSnapshot> Partidos { get; init; } = [];
+    public IReadOnlyList<PartidoSnapshot> CsvTemplatePartidos { get; init; } = [];
 }
