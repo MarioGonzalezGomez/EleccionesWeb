@@ -7,22 +7,31 @@ namespace Elecciones.Application.Services;
 public sealed class DefaultSignalComposer : ISignalComposer
 {
     private const double PactosTotalWidth = 1748d;
+    private const string PrimeTdProject = "01_TD_2026";
+    private const string PrimeEspecialesProject = "Especiales_ConPicto_2026";
 
     private const int UltimoMaxFichaWidth = 1756;
     private const int UltimoPosInicialIzq = 90;
     private const int UltimoPosInicialDch = 1844;
     private const int UltimoAnchoPequenoThreshold = 126;
 
-    private static readonly string[] UltimoBarrasIzq = ["Barra_Izq", "Barra_Izq1", "Barra_Izq2", "Barra_Izq3"];
-    private static readonly string[] UltimoBarrasDch = ["Barra_Dch", "Barra_Dch1", "Barra_Dch2", "Barra_Dch3"];
+    private static readonly string[] UltimoBarrasIzq = ["Barra_Izq", "Barra_Izq1", "Barra_Izq2", "Barra_Izq3", "Barra_Izq4", "Barra_Izq5"];
+    private static readonly string[] UltimoBarrasDch = ["Barra_Dch", "Barra_Dch1", "Barra_Dch2", "Barra_Dch3", "Barra_Dch4", "Barra_Dch5"];
 
     private readonly object _stateLock = new();
     private readonly Dictionary<GraphicModule, PactosState> _pactosStates = new();
     private readonly Dictionary<GraphicModule, SedesState> _sedesStates = new();
     private readonly Dictionary<GraphicModule, UltimoEscanoState> _ultimoEscanoStates = new();
+    private bool _animacionPrimerosEnabled = true;
+    private bool _animacionSondeoEnabled = true;
 
     public string Compose(OperationRequest request, BrainStormSnapshot snapshot)
     {
+        if (request.Command != GraphicCommand.None && IsRawPrimeCommand(request.Command))
+        {
+            return BuildPrimeCommandSignal(request.Command);
+        }
+
         var scene = ResolveScene(request);
 
         var lines = new List<string>
@@ -45,8 +54,14 @@ public sealed class DefaultSignalComposer : ISignalComposer
             return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
         }
 
+        if (string.Equals(scene, "CuentaAtras", StringComparison.OrdinalIgnoreCase))
+        {
+            lines.AddRange(ResolveCuentaAtrasLines(request.Action, request.SceneSeconds));
+            return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
         var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
-        var eventPath = ResolveEventPath(scene, request.Action);
+        var eventPaths = ResolveEventPaths(request, scene).ToList();
 
         if (NeedsCodeReload(scene, request.Action))
         {
@@ -58,9 +73,16 @@ public sealed class DefaultSignalComposer : ISignalComposer
             lines.Add(ItemSetNoValue("UltimoEscanoCSV", "MAP_LLSTRING_LOAD"));
         }
 
-        if (!string.IsNullOrWhiteSpace(eventPath))
+        if (eventPaths.Count > 0)
         {
-            lines.Add(EventRun(eventPath));
+            if (ShouldEmitPrimerosResultados(request, scene))
+            {
+                lines.Add(EventRun("PrimerosResultados/Entra"));
+            }
+
+            lines.AddRange(eventPaths
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(EventRun));
         }
 
         return string.Join("\n", lines);
@@ -111,17 +133,31 @@ public sealed class DefaultSignalComposer : ISignalComposer
         return normalized is "ULTIMO_ESCANO" or "ULTIMOESCANO" or "CARTON_PARTIDOS";
     }
 
-    private static string ResolveEventPath(string scene, OperationActionType action)
+    private static IEnumerable<string> ResolveEventPaths(OperationRequest request, string scene)
     {
         var normalized = scene.ToUpperInvariant();
+        var action = request.Action;
 
-        return normalized switch
+        if (request.Module == GraphicModule.Superfaldon)
+        {
+            if (normalized is "SUPERFALDON")
+            {
+                return YieldIfNotEmpty(ResolveSuperfaldonCarruselPath(request.Oficiales, action));
+            }
+
+            if (normalized is "ULTIMOESCANO" or "ULTIMO_ESCANO")
+            {
+                return YieldIfNotEmpty(ResolveSuperfaldonUltimoPath(action));
+            }
+        }
+
+        var path = normalized switch
         {
             "ESCRUTINIO" => MapSimple("Escrutinio", action),
             "SONDEO" => MapSimple("Sondeo", action),
             "TICKER" => MapSimple("TICKER", action),
 
-            "PARTICIPACION" => MapWithEncadena("PARTICIPACION", action),
+            "PARTICIPACION" => ResolveParticipacionPath(action),
             "CCAA_CARTONES" => action switch
             {
                 OperationActionType.Prepare => "CCAA_CARTONES/PREPARA",
@@ -130,17 +166,104 @@ public sealed class DefaultSignalComposer : ISignalComposer
                 OperationActionType.Exit => "CCAA/SALE",
                 _ => string.Empty
             },
-            "CARRUSEL" => MapWithEncadena("CARRUSEL", action),
-            "MAYORIAS" => MapWithEncadena("MAYORIAS", action),
-            "CARTON_PARTIDOS" => MapSimple("CARTON_PARTIDOS", action),
-            "ULTIMO_ESCANO" => MapSimple("ULTIMO_ESCANO", action),
+            "CARRUSEL" => ResolveCarruselPath(action),
+            "MAYORIAS" => ResolveMayoriasPath(action),
+            "CARTON_PARTIDOS" => MapSimpleNoUpdate("CARTON_PARTIDOS", action),
+            "ULTIMO_ESCANO" => MapSimpleNoUpdate("ULTIMO_ESCANO", action),
 
             "SUPERFALDON" => MapSimple("SUPERFALDON", action),
-            "ULTIMOESCANO" => MapSimple("ULTIMOESCANO", action),
+            "ULTIMOESCANO" => MapSimpleNoUpdate("ULTIMOESCANO", action),
             "SEDES" => MapWithEncadena("SEDES", action),
 
             _ => MapSimple(scene, action)
         };
+
+        if (normalized == "PARTICIPACION" && action == OperationActionType.Enter)
+        {
+            return YieldIfNotEmpty("PARTICIPACION/PREPARA", path);
+        }
+
+        if (normalized == "CCAA_CARTONES" && action == OperationActionType.Enter)
+        {
+            return YieldIfNotEmpty("CCAA_CARTONES/PREPARA", path);
+        }
+
+        if (normalized == "MAYORIAS" && action == OperationActionType.Enter)
+        {
+            return YieldIfNotEmpty("MAYORIAS/PREPARA", path);
+        }
+
+        if (normalized == "CARRUSEL" && action == OperationActionType.Enter)
+        {
+            var modePath = request.Oficiales ? "CARRUSEL/OFICIAL" : "CARRUSEL/SONDEO";
+            return YieldIfNotEmpty(modePath, path);
+        }
+
+        return YieldIfNotEmpty(path);
+    }
+
+    private static string ResolveSuperfaldonCarruselPath(bool oficiales, OperationActionType action)
+    {
+        return action switch
+        {
+            OperationActionType.Enter => oficiales ? "Superfaldon/Oficial/Entra" : "Superfaldon/Sondeo/Entra",
+            OperationActionType.Update => "ReloadPartidos",
+            OperationActionType.Exit => oficiales ? "Superfaldon/Oficial/Sale" : "Superfaldon/Sondeo/Sale",
+            _ => string.Empty
+        };
+    }
+
+    private static string ResolveSuperfaldonUltimoPath(OperationActionType action)
+    {
+        return action switch
+        {
+            OperationActionType.Enter => "ULTIMO/Entra",
+            OperationActionType.Exit => "ULTIMO/Sale",
+            _ => string.Empty
+        };
+    }
+
+    private static IEnumerable<string> ResolveCuentaAtrasLines(OperationActionType action, int? seconds)
+    {
+        var lines = new List<string>();
+        var safeSeconds = seconds.GetValueOrDefault();
+        if (safeSeconds < 0)
+        {
+            safeSeconds = 0;
+        }
+
+        switch (action)
+        {
+            case OperationActionType.Prepare:
+                if (safeSeconds > 0)
+                {
+                    lines.Add(ItemSetNumeric("CuentaAtras", "TIMER_LENGTH", safeSeconds));
+                }
+                lines.Add(EventRun("CuentaAtras/PonerEnInicio"));
+                break;
+            case OperationActionType.Enter:
+                if (safeSeconds > 0)
+                {
+                    lines.Add(ItemSetNumeric("CuentaAtras", "TIMER_LENGTH", safeSeconds));
+                    lines.Add(EventRun("CuentaAtras/PonerEnInicio"));
+                    lines.Add(EventRun("CuentaAtras/Play"));
+                }
+                lines.Add(EventRun("CuentaAtras/Entra"));
+                break;
+            case OperationActionType.Update:
+                if (safeSeconds > 0)
+                {
+                    lines.Add(ItemSetNumeric("CuentaAtras", "TIMER_LENGTH", safeSeconds));
+                }
+                lines.Add(EventRun("CuentaAtras/PonerEnInicio"));
+                lines.Add(EventRun("CuentaAtras/Play"));
+                break;
+            case OperationActionType.Exit:
+                lines.Add(EventRun("CuentaAtras/Sale"));
+                break;
+        }
+
+        return lines;
     }
 
     private static string MapSimple(string scene, OperationActionType action)
@@ -155,6 +278,54 @@ public sealed class DefaultSignalComposer : ISignalComposer
         };
     }
 
+    private static string MapSimpleNoUpdate(string scene, OperationActionType action)
+    {
+        return action switch
+        {
+            OperationActionType.Prepare => $"{scene}/PREPARA",
+            OperationActionType.Enter => $"{scene}/ENTRA",
+            OperationActionType.Update => string.Empty,
+            OperationActionType.Exit => $"{scene}/SALE",
+            _ => string.Empty
+        };
+    }
+
+    private static string ResolveCarruselPath(OperationActionType action)
+    {
+        return action switch
+        {
+            OperationActionType.Prepare => "CARRUSEL/PREPARA",
+            OperationActionType.Enter => "CARRUSEL/ENTRA",
+            OperationActionType.Update => string.Empty,
+            OperationActionType.Exit => "CARRUSEL/SALE",
+            _ => string.Empty
+        };
+    }
+
+    private static string ResolveParticipacionPath(OperationActionType action)
+    {
+        return action switch
+        {
+            OperationActionType.Prepare => "PARTICIPACION/PREPARA",
+            OperationActionType.Enter => "PARTICIPACION/ENTRA",
+            OperationActionType.Update => "PARTICIPACION/ENCADENA",
+            OperationActionType.Exit => "PARTICIPACION/SALE",
+            _ => string.Empty
+        };
+    }
+
+    private static string ResolveMayoriasPath(OperationActionType action)
+    {
+        return action switch
+        {
+            OperationActionType.Prepare => "MAYORIAS/PREPARA",
+            OperationActionType.Enter => "MAYORIAS/ENTRA",
+            OperationActionType.Update => string.Empty,
+            OperationActionType.Exit => "MAYORIAS/SALE",
+            _ => string.Empty
+        };
+    }
+
     private static string MapWithEncadena(string scene, OperationActionType action)
     {
         return action switch
@@ -165,6 +336,11 @@ public sealed class DefaultSignalComposer : ISignalComposer
             OperationActionType.Exit => $"{scene}/SALE",
             _ => string.Empty
         };
+    }
+
+    private static IEnumerable<string> YieldIfNotEmpty(params string[] paths)
+    {
+        return paths.Where(path => !string.IsNullOrWhiteSpace(path));
     }
 
     private IEnumerable<string> ResolveCommandLines(OperationRequest request, BrainStormSnapshot snapshot)
@@ -192,15 +368,27 @@ public sealed class DefaultSignalComposer : ISignalComposer
             ],
             GraphicCommand.TickerFotosEntra => [EventRun("EntraFoto")],
             GraphicCommand.TickerFotosSale => [EventRun("SaleFoto")],
+            GraphicCommand.TickerTDEntra => [EventRun("FALDON_TD/ENTRA")],
+            GraphicCommand.TickerTDActualiza =>
+            [
+                ItemSetString("NumeroEscrutado", "TEXT_STRING", $"{snapshot.Escrutado.ToString("0.##", CultureInfo.InvariantCulture)}%"),
+                EventRun("FALDON_TD/ACTUALIZA")
+            ],
+            GraphicCommand.TickerTDSale => [EventRun("FALDON_TD/SALE")],
+
+            GraphicCommand.VideoIn => ResolveVideoIn(request, snapshot),
+            GraphicCommand.VideoOut => ResolveVideoOut(request, snapshot),
+            GraphicCommand.VideoInTodos => ResolveVideoInTodos(snapshot),
+            GraphicCommand.VideoOutTodos => ResolveVideoOutTodos(snapshot),
 
             GraphicCommand.SedesEntra => request.Module == GraphicModule.Superfaldon
-                ? [EventRun("SEDES/ENTRA")]
+                ? ResolveSuperfaldonSedesEntra(request, snapshot)
                 : ResolveFaldonSedesEntra(request, snapshot),
             GraphicCommand.SedesEncadena => request.Module == GraphicModule.Superfaldon
-                ? [EventRun("SEDES/ENCADENA")]
+                ? ResolveSuperfaldonSedesEncadena(request, snapshot)
                 : ResolveFaldonSedesEncadena(request, snapshot),
             GraphicCommand.SedesSale => request.Module == GraphicModule.Superfaldon
-                ? [EventRun("SEDES/SALE")]
+                ? [EventRun("Superfaldon/Sedes/RepliegaSede")]
                 : ResolveFaldonSedesSale(request),
 
             GraphicCommand.PactosEntra => [EventRun("Pactometro/Entra")],
@@ -215,8 +403,120 @@ public sealed class DefaultSignalComposer : ISignalComposer
             GraphicCommand.UltimoEntraPartidoIzquierda => ResolveUltimoEntraPartido(request, snapshot, true),
             GraphicCommand.UltimoEntraPartidoDerecha => ResolveUltimoEntraPartido(request, snapshot, false),
 
+            GraphicCommand.PrimerosResultadosActiva => ResolvePrimerosResultadosCommand(true),
+            GraphicCommand.PrimerosResultadosDesactiva => ResolvePrimerosResultadosCommand(false),
+            GraphicCommand.AnimacionSondeoActiva => ResolveAnimacionSondeoCommand(true),
+            GraphicCommand.AnimacionSondeoDesactiva => ResolveAnimacionSondeoCommand(false),
+            GraphicCommand.DeSondeoAOficiales => [],
+            GraphicCommand.CambioEleccionesEuropa => [ItemSetNumeric("TICKER/EUROPA", "MAP_INT_PAR", 1)],
+            GraphicCommand.CambioEleccionesNacional => [ItemSetNumeric("TICKER/EUROPA", "MAP_INT_PAR", 0)],
+
             _ => []
         };
+    }
+
+    private static bool IsRawPrimeCommand(GraphicCommand command)
+    {
+        return command is GraphicCommand.PrimeSubirRotulosTD
+            or GraphicCommand.PrimeBajarRotulosTD
+            or GraphicCommand.PrimeSubirRotulosEspeciales
+            or GraphicCommand.PrimeBajarRotulosEspeciales;
+    }
+
+    private static string BuildPrimeCommandSignal(GraphicCommand command)
+    {
+        return command switch
+        {
+            GraphicCommand.PrimeSubirRotulosTD => string.Concat(
+                PrimeChangeProject(PrimeTdProject),
+                PrimeProjectParameter("TickerElec", "True")),
+            GraphicCommand.PrimeBajarRotulosTD => string.Concat(
+                PrimeChangeProject(PrimeTdProject),
+                PrimeProjectParameter("TickerElec", "False")),
+            GraphicCommand.PrimeSubirRotulosEspeciales => string.Concat(
+                PrimeChangeProject(PrimeEspecialesProject),
+                PrimeProjectParameter("Par_Posicion_GrupoXY", "2")),
+            GraphicCommand.PrimeBajarRotulosEspeciales => string.Concat(
+                PrimeChangeProject(PrimeEspecialesProject),
+                PrimeProjectParameter("Par_Posicion_GrupoXY", "1")),
+            _ => string.Empty
+        };
+    }
+
+    private static string PrimeChangeProject(string project)
+    {
+        return $"P\\CHANGE_PROJECT\\{project}\\\\\r\n";
+    }
+
+    private static string PrimeProjectParameter(string parameterName, string parameterValue)
+    {
+        return $"P\\PROJECT_PARAMETER\\{parameterName}\\{parameterValue}\\\\\r\n";
+    }
+
+    private IEnumerable<string> ResolvePrimerosResultadosCommand(bool enabled)
+    {
+        lock (_stateLock)
+        {
+            _animacionPrimerosEnabled = enabled;
+        }
+
+        return [];
+    }
+
+    private IEnumerable<string> ResolveAnimacionSondeoCommand(bool enabled)
+    {
+        lock (_stateLock)
+        {
+            _animacionSondeoEnabled = enabled;
+        }
+
+        return [];
+    }
+
+    private IEnumerable<string> ResolveVideoIn(OperationRequest request, BrainStormSnapshot snapshot)
+    {
+        var partido = TryResolveParty(snapshot, request.CommandValue);
+        if (partido is null)
+        {
+            return [];
+        }
+
+        var slotId = ResolvePartySlotId(snapshot, partido.Codigo);
+        return
+        [
+            ItemSetNoValue($"TICKER/FNC_Video{partido.Codigo}", "MAP_EXE"),
+            EventRun($"VIDEOS/{slotId}/ENTRA")
+        ];
+    }
+
+    private IEnumerable<string> ResolveVideoOut(OperationRequest request, BrainStormSnapshot snapshot)
+    {
+        var partido = TryResolveParty(snapshot, request.CommandValue);
+        if (partido is null)
+        {
+            return [];
+        }
+
+        var slotId = ResolvePartySlotId(snapshot, partido.Codigo);
+        return [EventRun($"VIDEOS/{slotId}/SALE")];
+    }
+
+    private IEnumerable<string> ResolveVideoInTodos(BrainStormSnapshot snapshot)
+    {
+        return snapshot.Partidos
+            .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
+            .Select(p => ItemSetNoValue($"TICKER/FNC_Video{p.Codigo}", "MAP_EXE"))
+            .ToList();
+    }
+
+    private IEnumerable<string> ResolveVideoOutTodos(BrainStormSnapshot snapshot)
+    {
+        var lines = snapshot.Partidos
+            .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
+            .Select(p => EventRun($"VIDEOS/{ResolvePartySlotId(snapshot, p.Codigo)}/SALE"))
+            .ToList();
+        lines.Add(EventRun("Titular/Recuperar"));
+        return lines;
     }
 
     private IEnumerable<string> ResolveFaldonSedesEntra(OperationRequest request, BrainStormSnapshot snapshot)
@@ -236,6 +536,37 @@ public sealed class DefaultSignalComposer : ISignalComposer
                 EventRun($"Sede{state.CurrentSlot}/Entra")
             ];
         }
+    }
+
+    private IEnumerable<string> ResolveSuperfaldonSedesEntra(OperationRequest request, BrainStormSnapshot snapshot)
+    {
+        var partyCode = ResolveSedePartyCode(snapshot, request.CommandValue);
+        if (string.IsNullOrWhiteSpace(partyCode))
+        {
+            return [];
+        }
+
+        return
+        [
+            MapString("codigoSede", $"'{partyCode}'"),
+            EventRun("Superfaldon/Sedes/DespliegaSede")
+        ];
+    }
+
+    private IEnumerable<string> ResolveSuperfaldonSedesEncadena(OperationRequest request, BrainStormSnapshot snapshot)
+    {
+        var partyCode = ResolveSedePartyCode(snapshot, request.CommandValue);
+        if (string.IsNullOrWhiteSpace(partyCode))
+        {
+            return [];
+        }
+
+        return
+        [
+            MapString("nextCodigoSede", $"'{partyCode}'"),
+            EventRun("Superfaldon/Sedes/PreparaEncadenaSede"),
+            EventRun("Superfaldon/Sedes/EncadenaSede")
+        ];
     }
 
     private IEnumerable<string> ResolveFaldonSedesEncadena(OperationRequest request, BrainStormSnapshot snapshot)
@@ -276,6 +607,8 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
     private IEnumerable<string> ResolvePactosSale(OperationRequest request)
     {
+        var eventRoot = GetPactometroEventRoot(request.Oficiales);
+
         lock (_stateLock)
         {
             _pactosStates.Remove(request.Module);
@@ -283,14 +616,16 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
         return
         [
-            EventRun("Pactometro/Sale"),
-            EventRun("Pactometro/reinicioPactometroIzq"),
-            EventRun("Pactometro/reinicioPactometroDer")
+            EventRun($"{eventRoot}/Sale"),
+            EventRun($"{eventRoot}/reinicioPactometroIzq"),
+            EventRun($"{eventRoot}/reinicioPactometroDer")
         ];
     }
 
     private IEnumerable<string> ResolvePactosReinicio(OperationRequest request)
     {
+        var eventRoot = GetPactometroEventRoot(request.Oficiales);
+
         lock (_stateLock)
         {
             _pactosStates.Remove(request.Module);
@@ -298,8 +633,8 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
         return
         [
-            EventRun("Pactometro/reinicioPactometroIzq"),
-            EventRun("Pactometro/reinicioPactometroDer")
+            EventRun($"{eventRoot}/reinicioPactometroIzq"),
+            EventRun($"{eventRoot}/reinicioPactometroDer")
         ];
     }
 
@@ -315,6 +650,8 @@ public sealed class DefaultSignalComposer : ISignalComposer
         {
             var state = GetOrCreatePactosState(request.Module);
             var list = izquierda ? state.PartidosIzquierda : state.PartidosDerecha;
+            var eventRoot = GetPactometroEventRoot(request.Oficiales);
+            var sceneRoot = GetPactometroSceneRoot(request.Oficiales);
 
             if (!list.Any(x => string.Equals(x, partido.Codigo, StringComparison.OrdinalIgnoreCase)))
             {
@@ -323,8 +660,10 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
             RecalculatePactosState(state, snapshot, request.Oficiales);
 
-            var seatCount = izquierda ? state.EscaniosIzquierda : state.EscaniosDerecha;
-            var width = izquierda ? state.AnchoIzquierda : state.AnchoDerecha;
+            var seatCountDesde = izquierda ? state.EscaniosIzquierdaDesde : state.EscaniosDerechaDesde;
+            var seatCountHasta = izquierda ? state.EscaniosIzquierdaHasta : state.EscaniosDerechaHasta;
+            var widthDesde = izquierda ? state.AnchoIzquierdaDesde : state.AnchoDerechaDesde;
+            var widthHasta = izquierda ? state.AnchoIzquierdaHasta : state.AnchoDerechaHasta;
             var isFirst = list.Count == 1;
             var logoId = ResolvePartySlotId(snapshot, partido.Codigo);
             var logoSlot = list.Count.ToString("D2", CultureInfo.InvariantCulture);
@@ -333,46 +672,83 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
             if (izquierda)
             {
-                lines.Add(ItemSetNumeric("Pactometro_IzqVALOR", "MAP_INT_PAR", seatCount));
-                lines.Add(ItemGoNumeric("BarraIzquierdas", "PRIM_RECGLO_LEN[0]", width, 0.3, 0));
+                if (request.Oficiales)
+                {
+                    lines.Add(ItemSetNumeric("Pactometro_IzqVALOR", "MAP_INT_PAR", seatCountDesde));
+                    lines.Add(ItemGoNumeric("BarraIzquierdas", "PRIM_RECGLO_LEN[0]", widthDesde, 0.3, 0));
+                }
+                else
+                {
+                    lines.Add(ItemSetNumeric("Pactometro_IzqVALORDesde", "MAP_INT_PAR", seatCountDesde));
+                    lines.Add(ItemSetNumeric("Pactometro_IzqVALORHasta", "MAP_INT_PAR", seatCountHasta));
+                    lines.Add(ItemGoNumeric("BarraIzquierdasDesde", "PRIM_RECGLO_LEN[0]", widthDesde, 0.3, 0));
+                    lines.Add(ItemGoNumeric("BarraIzquierdasHasta", "PRIM_RECGLO_LEN[0]", widthHasta, 0.3, 0));
+                }
             }
             else
             {
-                lines.Add(ItemSetNumeric("Pactometro_DerVALOR", "MAP_INT_PAR", seatCount));
-                lines.Add(ItemGoNumeric("BarraDerechas", "PRIM_RECGLO_LEN[0]", width, 0.3, 0));
+                if (request.Oficiales)
+                {
+                    lines.Add(ItemSetNumeric("Pactometro_DerVALOR", "MAP_INT_PAR", seatCountDesde));
+                    lines.Add(ItemGoNumeric("BarraDerechas", "PRIM_RECGLO_LEN[0]", widthDesde, 0.3, 0));
+                }
+                else
+                {
+                    lines.Add(ItemSetNumeric("Pactometro_DerVALORDesde", "MAP_INT_PAR", seatCountDesde));
+                    lines.Add(ItemSetNumeric("Pactometro_DerVALORHasta", "MAP_INT_PAR", seatCountHasta));
+                    lines.Add(ItemGoNumeric("BarraDerechasDesde", "PRIM_RECGLO_LEN[0]", widthDesde, 0.3, 0));
+                    lines.Add(ItemGoNumeric("BarraDerechasHasta", "PRIM_RECGLO_LEN[0]", widthHasta, 0.3, 0));
+                }
             }
 
-            if (snapshot.MayoriaAbsoluta > 0 && seatCount >= snapshot.MayoriaAbsoluta)
+            var seatCountMayoria = request.Oficiales ? seatCountDesde : seatCountHasta;
+            if (snapshot.MayoriaAbsoluta > 0 && seatCountMayoria >= snapshot.MayoriaAbsoluta)
             {
-                lines.Add(EventRun("Pactometro/PasaMayoria"));
+                lines.Add(EventRun($"{eventRoot}/PasaMayoria"));
             }
 
             if (izquierda)
             {
-                lines.Add(ItemSetString($"Graficos/Pactometro/Izq/LogosIzq/Logo{logoSlot}", "OBJ_OVERMAT", $"Logos/Logo{logoId}"));
+                lines.Add(ItemSetString($"{sceneRoot}/Izq/LogosIzq/Logo{logoSlot}", "OBJ_OVERMAT", $"Logos/Logo{logoId}"));
                 if (isFirst)
                 {
-                    lines.Add(ItemSetNoValue("Graficos/Pactometro/Izq/LogosIzq", "OBJ_GRID_JUMP_TO_END"));
-                    lines.Add(EventRun("Pactometro/lanzaPactometroIzq"));
-                    lines.Add(ItemSetString("Graficos/Pactometro/Izq/BarraIzquierdas", "OBJ_OVERMAT", logoId));
+                    lines.Add(ItemSetNoValue($"{sceneRoot}/Izq/LogosIzq", "OBJ_GRID_JUMP_TO_END"));
+                    lines.Add(EventRun($"{eventRoot}/lanzaPactometroIzq"));
+                    if (request.Oficiales)
+                    {
+                        lines.Add(ItemSetString($"{sceneRoot}/Izq/BarraIzquierdas", "OBJ_OVERMAT", logoId));
+                    }
+                    else
+                    {
+                        lines.Add(ItemSetString($"{sceneRoot}/Izq/BarraIzquierdasDesde", "OBJ_OVERMAT", logoId));
+                        lines.Add(ItemSetString($"{sceneRoot}/Izq/BarraIzquierdasHasta", "OBJ_OVERMAT", $"Hasta/{logoId}"));
+                    }
                 }
                 else
                 {
-                    lines.Add(ItemSetNoValue("Graficos/Pactometro/Izq/LogosIzq", "OBJ_GRID_JUMP_NEXT"));
+                    lines.Add(ItemSetNoValue($"{sceneRoot}/Izq/LogosIzq", "OBJ_GRID_JUMP_NEXT"));
                 }
             }
             else
             {
-                lines.Add(ItemSetString($"Graficos/Pactometro/Der/LogosDer/Logo{logoSlot}", "OBJ_OVERMAT", $"Logos/Logo{logoId}"));
+                lines.Add(ItemSetString($"{sceneRoot}/Der/LogosDer/Logo{logoSlot}", "OBJ_OVERMAT", $"Logos/Logo{logoId}"));
                 if (isFirst)
                 {
-                    lines.Add(ItemSetNoValue("Graficos/Pactometro/Der/LogosDer", "OBJ_GRID_JUMP_TO_END"));
-                    lines.Add(EventRun("Pactometro/lanzaPactometroDer"));
-                    lines.Add(ItemSetString("Graficos/Pactometro/Der/BarraDerechas", "OBJ_OVERMAT", logoId));
+                    lines.Add(ItemSetNoValue($"{sceneRoot}/Der/LogosDer", "OBJ_GRID_JUMP_TO_END"));
+                    lines.Add(EventRun($"{eventRoot}/lanzaPactometroDer"));
+                    if (request.Oficiales)
+                    {
+                        lines.Add(ItemSetString($"{sceneRoot}/Der/BarraDerechas", "OBJ_OVERMAT", logoId));
+                    }
+                    else
+                    {
+                        lines.Add(ItemSetString($"{sceneRoot}/Der/BarraDerechasDesde", "OBJ_OVERMAT", logoId));
+                        lines.Add(ItemSetString($"{sceneRoot}/Der/BarraDerechasHasta", "OBJ_OVERMAT", $"Hasta/{logoId}"));
+                    }
                 }
                 else
                 {
-                    lines.Add(ItemSetNoValue("Graficos/Pactometro/Der/LogosDer", "OBJ_GRID_JUMP_NEXT"));
+                    lines.Add(ItemSetNoValue($"{sceneRoot}/Der/LogosDer", "OBJ_GRID_JUMP_NEXT"));
                 }
             }
 
@@ -386,6 +762,7 @@ public sealed class DefaultSignalComposer : ISignalComposer
         {
             var state = GetOrCreatePactosState(request.Module);
             var list = izquierda ? state.PartidosIzquierda : state.PartidosDerecha;
+            var sceneRoot = GetPactometroSceneRoot(request.Oficiales);
 
             if (list.Count == 0)
             {
@@ -397,19 +774,43 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
             if (izquierda)
             {
+                if (request.Oficiales)
+                {
+                    return
+                    [
+                        ItemSetNumeric("Pactometro_IzqVALOR", "MAP_INT_PAR", state.EscaniosIzquierdaDesde),
+                        ItemGoNumeric("BarraIzquierdas", "PRIM_RECGLO_LEN[0]", state.AnchoIzquierdaDesde, 0.3, 0),
+                        ItemSetNoValue($"{sceneRoot}/Izq/LogosIzq", "OBJ_GRID_JUMP_PREV")
+                    ];
+                }
+
                 return
                 [
-                    ItemSetNumeric("Pactometro_IzqVALOR", "MAP_INT_PAR", state.EscaniosIzquierda),
-                    ItemGoNumeric("BarraIzquierdas", "PRIM_RECGLO_LEN[0]", state.AnchoIzquierda, 0.3, 0),
-                    ItemSetNoValue("Graficos/Pactometro/Izq/LogosIzq", "OBJ_GRID_JUMP_PREV")
+                    ItemSetNumeric("Pactometro_IzqVALORDesde", "MAP_INT_PAR", state.EscaniosIzquierdaDesde),
+                    ItemSetNumeric("Pactometro_IzqVALORHasta", "MAP_INT_PAR", state.EscaniosIzquierdaHasta),
+                    ItemGoNumeric("BarraIzquierdasDesde", "PRIM_RECGLO_LEN[0]", state.AnchoIzquierdaDesde, 0.3, 0),
+                    ItemGoNumeric("BarraIzquierdasHasta", "PRIM_RECGLO_LEN[0]", state.AnchoIzquierdaHasta, 0.3, 0),
+                    ItemSetNoValue($"{sceneRoot}/Izq/LogosIzq", "OBJ_GRID_JUMP_PREV")
+                ];
+            }
+
+            if (request.Oficiales)
+            {
+                return
+                [
+                    ItemSetNumeric("Pactometro_DerVALOR", "MAP_INT_PAR", state.EscaniosDerechaDesde),
+                    ItemGoNumeric("BarraDerechas", "PRIM_RECGLO_LEN[0]", state.AnchoDerechaDesde, 0.3, 0),
+                    ItemSetNoValue($"{sceneRoot}/Der/LogosDer", "OBJ_GRID_JUMP_PREV")
                 ];
             }
 
             return
             [
-                ItemSetNumeric("Pactometro_DerVALOR", "MAP_INT_PAR", state.EscaniosDerecha),
-                ItemGoNumeric("BarraDerechas", "PRIM_RECGLO_LEN[0]", state.AnchoDerecha, 0.3, 0),
-                ItemSetNoValue("Graficos/Pactometro/Der/LogosDer", "OBJ_GRID_JUMP_PREV")
+                ItemSetNumeric("Pactometro_DerVALORDesde", "MAP_INT_PAR", state.EscaniosDerechaDesde),
+                ItemSetNumeric("Pactometro_DerVALORHasta", "MAP_INT_PAR", state.EscaniosDerechaHasta),
+                ItemGoNumeric("BarraDerechasDesde", "PRIM_RECGLO_LEN[0]", state.AnchoDerechaDesde, 0.3, 0),
+                ItemGoNumeric("BarraDerechasHasta", "PRIM_RECGLO_LEN[0]", state.AnchoDerechaHasta, 0.3, 0),
+                ItemSetNoValue($"{sceneRoot}/Der/LogosDer", "OBJ_GRID_JUMP_PREV")
             ];
         }
     }
@@ -437,7 +838,7 @@ public sealed class DefaultSignalComposer : ISignalComposer
             var state = GetOrCreateUltimoState(request.Module);
             var sideEntries = izquierda ? state.PartidosIzquierda : state.PartidosDerecha;
             var sideIndex = sideEntries.Count;
-            if (sideIndex >= 4)
+            if (sideIndex >= UltimoBarrasIzq.Length)
             {
                 return [];
             }
@@ -500,10 +901,14 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
     private void RecalculatePactosState(PactosState state, BrainStormSnapshot snapshot, bool oficiales)
     {
-        state.EscaniosIzquierda = 0;
-        state.EscaniosDerecha = 0;
-        state.AnchoIzquierda = 0;
-        state.AnchoDerecha = 0;
+        state.EscaniosIzquierdaDesde = 0;
+        state.EscaniosIzquierdaHasta = 0;
+        state.EscaniosDerechaDesde = 0;
+        state.EscaniosDerechaHasta = 0;
+        state.AnchoIzquierdaDesde = 0;
+        state.AnchoIzquierdaHasta = 0;
+        state.AnchoDerechaDesde = 0;
+        state.AnchoDerechaHasta = 0;
 
         var totalEscanios = Math.Max(1, snapshot.EscaniosTotales);
         var partidosPorCodigo = snapshot.Partidos.ToDictionary(x => x.Codigo, StringComparer.OrdinalIgnoreCase);
@@ -515,9 +920,17 @@ public sealed class DefaultSignalComposer : ISignalComposer
                 continue;
             }
 
-            var escanios = Math.Max(0, ResolveEscanos(partido, oficiales));
-            state.EscaniosIzquierda += escanios;
-            state.AnchoIzquierda += escanios * PactosTotalWidth / totalEscanios;
+            var escaniosDesde = oficiales
+                ? Math.Max(0, partido.Escanios)
+                : Math.Max(0, partido.EscaniosDesdeSondeo);
+            var escaniosHasta = oficiales
+                ? Math.Max(0, partido.Escanios)
+                : Math.Max(0, partido.EscaniosHastaSondeo);
+
+            state.EscaniosIzquierdaDesde += escaniosDesde;
+            state.EscaniosIzquierdaHasta += escaniosHasta;
+            state.AnchoIzquierdaDesde += escaniosDesde * PactosTotalWidth / totalEscanios;
+            state.AnchoIzquierdaHasta += escaniosHasta * PactosTotalWidth / totalEscanios;
         }
 
         foreach (var codigo in state.PartidosDerecha)
@@ -527,9 +940,17 @@ public sealed class DefaultSignalComposer : ISignalComposer
                 continue;
             }
 
-            var escanios = Math.Max(0, ResolveEscanos(partido, oficiales));
-            state.EscaniosDerecha += escanios;
-            state.AnchoDerecha += escanios * PactosTotalWidth / totalEscanios;
+            var escaniosDesde = oficiales
+                ? Math.Max(0, partido.Escanios)
+                : Math.Max(0, partido.EscaniosDesdeSondeo);
+            var escaniosHasta = oficiales
+                ? Math.Max(0, partido.Escanios)
+                : Math.Max(0, partido.EscaniosHastaSondeo);
+
+            state.EscaniosDerechaDesde += escaniosDesde;
+            state.EscaniosDerechaHasta += escaniosHasta;
+            state.AnchoDerechaDesde += escaniosDesde * PactosTotalWidth / totalEscanios;
+            state.AnchoDerechaHasta += escaniosHasta * PactosTotalWidth / totalEscanios;
         }
     }
 
@@ -587,9 +1008,35 @@ public sealed class DefaultSignalComposer : ISignalComposer
         return "01";
     }
 
+    private static string? ResolveSedePartyCode(BrainStormSnapshot snapshot, string commandValue)
+    {
+        var partido = TryResolveParty(snapshot, commandValue);
+        if (partido is not null && !string.IsNullOrWhiteSpace(partido.Codigo))
+        {
+            return partido.Codigo.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(commandValue))
+        {
+            return commandValue.Trim();
+        }
+
+        return null;
+    }
+
     private static int ResolveEscanos(PartidoSnapshot partido, bool oficiales)
     {
         return oficiales ? partido.Escanios : partido.EscaniosHastaSondeo;
+    }
+
+    private static string GetPactometroEventRoot(bool oficiales)
+    {
+        return oficiales ? "Pactometro" : "PactometroSondeo";
+    }
+
+    private static string GetPactometroSceneRoot(bool oficiales)
+    {
+        return oficiales ? "Graficos/Pactometro" : "Graficos/PactometroSondeo";
     }
 
     private static string NormalizeSiglasForScene(string siglas)
@@ -614,6 +1061,24 @@ public sealed class DefaultSignalComposer : ISignalComposer
             .Replace("-", string.Empty, StringComparison.Ordinal)
             .Replace("_", string.Empty, StringComparison.Ordinal)
             .ToUpperInvariant();
+    }
+
+    private bool ShouldEmitPrimerosResultados(OperationRequest request, string scene)
+    {
+        if (request.Action != OperationActionType.Enter)
+        {
+            return false;
+        }
+
+        if (!string.Equals(scene, "TICKER", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        lock (_stateLock)
+        {
+            return _animacionPrimerosEnabled && (request.Oficiales || _animacionSondeoEnabled);
+        }
     }
 
     private void ClearModuleState(GraphicModule module)
@@ -710,10 +1175,14 @@ public sealed class DefaultSignalComposer : ISignalComposer
         public List<string> PartidosIzquierda { get; } = [];
         public List<string> PartidosDerecha { get; } = [];
 
-        public int EscaniosIzquierda { get; set; }
-        public int EscaniosDerecha { get; set; }
-        public double AnchoIzquierda { get; set; }
-        public double AnchoDerecha { get; set; }
+        public int EscaniosIzquierdaDesde { get; set; }
+        public int EscaniosIzquierdaHasta { get; set; }
+        public int EscaniosDerechaDesde { get; set; }
+        public int EscaniosDerechaHasta { get; set; }
+        public double AnchoIzquierdaDesde { get; set; }
+        public double AnchoIzquierdaHasta { get; set; }
+        public double AnchoDerechaDesde { get; set; }
+        public double AnchoDerechaHasta { get; set; }
     }
 
     private sealed class SedesState

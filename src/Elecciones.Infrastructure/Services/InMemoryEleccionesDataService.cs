@@ -21,12 +21,18 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
         new("MED02", "Sondeo Medio 2")
     ];
 
-    public Task<IReadOnlyList<CircunscripcionSummary>> GetCircunscripcionesAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<CircunscripcionSummary>> GetCircunscripcionesAsync(
+        int electionSlot = 1,
+        int connectionType = 0,
+        CancellationToken cancellationToken = default)
     {
         return Task.FromResult(Circunscripciones);
     }
 
-    public Task<IReadOnlyList<MedioSummary>> GetMediosAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<MedioSummary>> GetMediosAsync(
+        int electionSlot = 1,
+        int connectionType = 0,
+        CancellationToken cancellationToken = default)
     {
         return Task.FromResult(Medios);
     }
@@ -44,11 +50,11 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
 
         var partidos = new List<PartidoSnapshot>
         {
-            new("001", "PP", baseEsc + 8, baseEsc + 7, baseEsc + 9, baseEsc + 6, 34.4, 842100),
-            new("002", "PSOE", baseEsc + 7, baseEsc + 6, baseEsc + 8, baseEsc + 8, 31.9, 780200),
-            new("003", "VOX", baseEsc + 2, baseEsc + 2, baseEsc + 3, baseEsc + 1, 12.1, 302110),
-            new("004", "SUMAR", baseEsc + 1, baseEsc + 1, baseEsc + 2, baseEsc + 3, 9.4, 224500),
-            new("005", "OTROS", baseEsc, baseEsc, baseEsc + 1, baseEsc, 6.3, 147800)
+            new("001", "00001", "PP", "Partido Popular", string.Empty, baseEsc + 8, baseEsc + 7, baseEsc + 9, baseEsc + 6, 34.4, 32.2, 842100, 790000, 1200, 0, 0),
+            new("002", "00002", "PSOE", "Partido Socialista", string.Empty, baseEsc + 7, baseEsc + 6, baseEsc + 8, baseEsc + 8, 31.9, 33.1, 780200, 800000, 1600, 1, 0),
+            new("003", "00003", "VOX", "VOX", string.Empty, baseEsc + 2, baseEsc + 2, baseEsc + 3, baseEsc + 1, 12.1, 10.8, 302110, 270000, 980, 0, 1),
+            new("004", "00004", "SUMAR", "SUMAR", string.Empty, baseEsc + 1, baseEsc + 1, baseEsc + 2, baseEsc + 3, 9.4, 11.2, 224500, 245000, 730, 0, 0),
+            new("005", "00005", "OTROS", "Otros", string.Empty, baseEsc, baseEsc, baseEsc + 1, baseEsc, 6.3, 5.8, 147800, 139000, 410, 0, 0)
         };
 
         if (!oficiales && !string.IsNullOrWhiteSpace(query.MedioCodigo) && !IsRtve(query.MedioCodigo))
@@ -68,12 +74,18 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
         {
             Circunscripcion = circ,
             Oficiales = oficiales,
-            Avance = 3,
+            Avance = query.Avance is >= 1 and <= 4 ? query.Avance.Value : 3,
             Escrutado = 78.50,
+            Participacion = 66.20,
+            ParticipacionHistorica = 64.10,
+            ParticipacionMedia = 65.00,
             EscaniosTotales = 67,
             MayoriaAbsoluta = 34,
             VotantesTotales = 2456710,
+            VotantesFaltan = 834000,
             AnioUltimasElecciones = 2023,
+            NumPartidos = partidos.Count(p => oficiales ? p.Escanios > 0 : p.EscaniosHastaSondeo > 0),
+            NombreSondeo = query.MedioCodigo ?? string.Empty,
             GeneratedAtUtc = DateTime.UtcNow,
             Partidos = partidos
         };

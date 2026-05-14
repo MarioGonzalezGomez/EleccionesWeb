@@ -1,0 +1,364 @@
+@page "/operacion/botonera"
+@implements IDisposable
+@using Elecciones.Application.Abstractions
+@using Elecciones.Application.Models
+@inject IModuleLockService ModuleLockService
+@inject IOperationService OperationService
+@inject IEleccionesDataService DataService
+@inject IOperatorAuthorizationService AuthorizationService
+@inject IConfiguration Configuration
+
+<PageTitle>Botonera</PageTitle>
+
+<h1>Botonera operativa</h1>
+
+@if (!string.IsNullOrWhiteSpace(feedbackMessage))
+{
+    <div class="alert @(feedbackIsError ? "alert-danger" : "alert-success")" role="alert">
+        @feedbackMessage
+    </div>
+}
+
+<div class="alert alert-info" role="alert">
+    Rol: <strong>@AuthorizationService.GetRole(NormalizedOperatorId)</strong> | Modulo: <strong>Faldon</strong>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-12 col-md-2">
+        <label class="form-label">Eleccion activa</label>
+        <select class="form-select" value="@selectedElectionSlot" @onchange="OnElectionSlotChanged">
+            @foreach (var slot in availableElectionSlots)
+            {
+                <option value="@slot">Eleccion @slot</option>
+            }
+        </select>
+    </div>
+    <div class="col-12 col-md-2">
+        <label class="form-label">Origen BD</label>
+        <select class="form-select" value="@selectedConnectionType" @onchange="OnConnectionTypeChanged">
+            <option value="0">Auto</option>
+            <option value="1">Principal</option>
+            <option value="2">Reserva</option>
+            <option value="3">Local</option>
+        </select>
+    </div>
+    <div class="col-12 col-md-3">
+        <label class="form-label">Operador</label>
+        <input class="form-control" @bind="operatorId" />
+    </div>
+    <div class="col-12 col-md-3">
+        <label class="form-label">Destino TCP</label>
+        <select class="form-select" @bind="selectedTarget">
+            @foreach (var target in Enum.GetValues<GraphicsTarget>())
+            {
+                <option value="@target">@target</option>
+            }
+        </select>
+    </div>
+    <div class="col-12 col-md-2">
+        <div class="form-check mt-4">
+            <input id="oficialesBotonera" class="form-check-input" type="checkbox" @bind="oficiales" />
+            <label class="form-check-label" for="oficialesBotonera">Oficiales</label>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-12 col-md-4">
+        <label class="form-label">Circunscripcion</label>
+        <select class="form-select" @bind="selectedCircunscripcionCodigo">
+            @foreach (var circ in circunscripciones)
+            {
+                <option value="@circ.Codigo">@circ.Codigo - @circ.Nombre</option>
+            }
+        </select>
+    </div>
+    <div class="col-12 col-md-3">
+        <label class="form-label">Medio sondeo</label>
+        <select class="form-select" @bind="selectedMedioCodigo" disabled="@oficiales">
+            @foreach (var medio in medios)
+            {
+                <option value="@medio.Codigo">@medio.Descripcion</option>
+            }
+        </select>
+    </div>
+    <div class="col-12 col-md-2">
+        <label class="form-label">Avance</label>
+        <select class="form-select" @bind="selectedAvance">
+            <option value="0">Automatico</option>
+            <option value="1">Avance 1</option>
+            <option value="2">Avance 2</option>
+            <option value="3">Avance 3</option>
+            <option value="4">Final</option>
+        </select>
+    </div>
+    <div class="col-12 col-md-3 d-flex align-items-end">
+        <button class="btn btn-outline-secondary" @onclick="LoadPartiesAsync" disabled="@loadingParties">
+            @(loadingParties ? "Cargando..." : "Refrescar partidos")
+        </button>
+    </div>
+</div>
+
+<div class="d-flex flex-wrap gap-2 mb-3">
+    <button class="btn btn-sm btn-outline-primary" @onclick="AcquireLock" disabled="@(!CanOperate || (lockState.IsLocked && !IsOwner))">Lock Faldon</button>
+    <button class="btn btn-sm btn-outline-secondary" @onclick="ReleaseLock" disabled="@(!CanOperate || !IsOwner)">Unlock Faldon</button>
+</div>
+
+<div class="row g-3">
+    <div class="col-12 col-xl-4">
+        <h5>Ticker</h5>
+        <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.TickerVotosEntra)" disabled="@(!CanExecute)">Votos Entra</button>
+            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.TickerVotosSale)" disabled="@(!CanExecute)">Votos Sale</button>
+            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.TickerHistoricosEntra)" disabled="@(!CanExecute)">Historicos Entra</button>
+            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.TickerHistoricosSale)" disabled="@(!CanExecute)">Historicos Sale</button>
+            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.TickerFotosEntra)" disabled="@(!CanExecute)">Fotos Entra</button>
+            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.TickerFotosSale)" disabled="@(!CanExecute)">Fotos Sale</button>
+            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.TickerTDEntra)" disabled="@(!CanExecute)">TD Entra</button>
+            <button class="btn btn-sm btn-outline-primary" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.TickerTDActualiza)" disabled="@(!CanExecute)">TD Actualiza</button>
+            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.TickerTDSale)" disabled="@(!CanExecute)">TD Sale</button>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-4">
+        <h5>Video</h5>
+        <label class="form-label form-label-sm">Partido</label>
+        <select class="form-select form-select-sm mb-2" @bind="selectedPartyCode">
+            @foreach (var p in availableParties)
+            {
+                <option value="@p.Codigo">@p.Codigo - @p.Siglas</option>
+            }
+        </select>
+        <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoIn)" disabled="@(!CanExecute || string.IsNullOrWhiteSpace(selectedPartyCode))">Video In</button>
+            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOut)" disabled="@(!CanExecute || string.IsNullOrWhiteSpace(selectedPartyCode))">Video Out</button>
+            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoInTodos)" disabled="@(!CanExecute)">Video In Todos</button>
+            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOutTodos)" disabled="@(!CanExecute)">Video Out Todos</button>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-4">
+        <h5>Rotulos Prime</h5>
+        <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.PrimeSubirRotulosTD)" disabled="@(!CanExecute)">Subir TD</button>
+            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.PrimeBajarRotulosTD)" disabled="@(!CanExecute)">Bajar TD</button>
+            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.PrimeSubirRotulosEspeciales)" disabled="@(!CanExecute)">Subir Especiales</button>
+            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteTickerCommandAsync(GraphicCommand.PrimeBajarRotulosEspeciales)" disabled="@(!CanExecute)">Bajar Especiales</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string operatorId = Environment.UserName;
+    private string feedbackMessage = string.Empty;
+    private bool feedbackIsError;
+
+    private IReadOnlyList<CircunscripcionSummary> circunscripciones = [];
+    private IReadOnlyList<MedioSummary> medios = [new("RTVE", "RTVE")];
+    private IReadOnlyList<PartidoSnapshot> availableParties = [];
+    private string selectedPartyCode = string.Empty;
+
+    private GraphicsTarget selectedTarget = GraphicsTarget.Ipf;
+    private string selectedCircunscripcionCodigo = string.Empty;
+    private string selectedMedioCodigo = "RTVE";
+    private int selectedAvance;
+    private int selectedElectionSlot = 1;
+    private int numEleccionesSimultaneas = 1;
+    private int selectedConnectionType;
+    private bool oficiales;
+    private bool loadingParties;
+
+    private IEnumerable<int> availableElectionSlots => Enumerable.Range(1, Math.Clamp(numEleccionesSimultaneas, 1, 3));
+    private string NormalizedOperatorId => operatorId.Trim();
+    private bool CanOperate => AuthorizationService.CanOperate(NormalizedOperatorId, GraphicModule.Faldon);
+    private ModuleLockInfo lockState => ModuleLockService.GetStates().First(x => x.Module == GraphicModule.Faldon);
+    private bool IsOwner => ModuleLockService.IsOwner(GraphicModule.Faldon, NormalizedOperatorId);
+    private bool CanExecute => CanOperate && IsOwner;
+
+    protected override async Task OnInitializedAsync()
+    {
+        numEleccionesSimultaneas = ResolveIntFromConfig("Database:NumEleccionesSimultaneas", 1, 1, 3);
+        selectedElectionSlot = ResolveIntFromConfig("Database:DefaultElectionSlot", 1, 1, numEleccionesSimultaneas);
+        await ReloadReferenceDataAsync();
+        await LoadPartiesAsync();
+    }
+
+    private async Task ReloadReferenceDataAsync()
+    {
+        var previousCircCode = selectedCircunscripcionCodigo;
+        var previousMedioCode = selectedMedioCodigo;
+
+        circunscripciones = await DataService.GetCircunscripcionesAsync(selectedElectionSlot, selectedConnectionType);
+        selectedCircunscripcionCodigo = circunscripciones.FirstOrDefault(x => x.Codigo == previousCircCode)?.Codigo
+            ?? circunscripciones.FirstOrDefault()?.Codigo
+            ?? string.Empty;
+
+        var loadedMedios = await DataService.GetMediosAsync(selectedElectionSlot, selectedConnectionType);
+        medios = BuildMediosForUi(loadedMedios);
+        selectedMedioCodigo = medios.FirstOrDefault(x => string.Equals(x.Codigo, previousMedioCode, StringComparison.OrdinalIgnoreCase))?.Codigo
+            ?? medios.FirstOrDefault()?.Codigo
+            ?? "RTVE";
+    }
+
+    private async Task LoadPartiesAsync()
+    {
+        loadingParties = true;
+        try
+        {
+            var snapshot = await DataService.GetSnapshotAsync(BuildQuery(), oficiales);
+            availableParties = snapshot.Partidos
+                .Where(x => !string.IsNullOrWhiteSpace(x.Codigo))
+                .OrderByDescending(GetDisplayEscanos)
+                .ThenByDescending(x => x.Votos)
+                .ToList();
+
+            selectedPartyCode = availableParties.FirstOrDefault()?.Codigo ?? string.Empty;
+            feedbackMessage = $"Partidos cargados: {availableParties.Count}";
+            feedbackIsError = false;
+        }
+        catch (Exception ex)
+        {
+            feedbackMessage = $"Error cargando partidos: {ex.Message}";
+            feedbackIsError = true;
+        }
+        finally
+        {
+            loadingParties = false;
+        }
+    }
+
+    private async Task ExecuteTickerCommandAsync(GraphicCommand command)
+    {
+        await ExecuteCommandAsync(command, string.Empty);
+    }
+
+    private async Task ExecuteVideoCommandAsync(GraphicCommand command)
+    {
+        await ExecuteCommandAsync(command, selectedPartyCode);
+    }
+
+    private async Task ExecuteCommandAsync(GraphicCommand command, string commandValue)
+    {
+        if (!CanOperate)
+        {
+            feedbackMessage = "No tienes permisos para operar el módulo Faldon.";
+            feedbackIsError = true;
+            return;
+        }
+
+        if (!IsOwner)
+        {
+            feedbackMessage = "Bloquea Faldon con tu usuario antes de operar la botonera.";
+            feedbackIsError = true;
+            return;
+        }
+
+        var request = new OperationRequest
+        {
+            OperatorId = NormalizedOperatorId,
+            Module = GraphicModule.Faldon,
+            Scene = "TICKER",
+            Action = OperationActionType.Update,
+            Command = command,
+            CommandValue = commandValue,
+            Target = selectedTarget,
+            Oficiales = oficiales,
+            ExportName = "BrainStorm",
+            Query = BuildQuery()
+        };
+
+        var result = await OperationService.ExecuteAsync(request);
+        feedbackMessage = result.Message;
+        feedbackIsError = !result.Success;
+    }
+
+    private int GetDisplayEscanos(PartidoSnapshot p)
+    {
+        return oficiales ? p.Escanios : p.EscaniosHastaSondeo;
+    }
+
+    private async Task OnElectionSlotChanged(ChangeEventArgs args)
+    {
+        if (!int.TryParse(args.Value?.ToString(), out var parsed))
+        {
+            return;
+        }
+
+        selectedElectionSlot = Math.Clamp(parsed, 1, numEleccionesSimultaneas);
+        await ReloadReferenceDataAsync();
+        await LoadPartiesAsync();
+    }
+
+    private async Task OnConnectionTypeChanged(ChangeEventArgs args)
+    {
+        if (!int.TryParse(args.Value?.ToString(), out var parsed))
+        {
+            return;
+        }
+
+        selectedConnectionType = parsed is >= 0 and <= 3 ? parsed : 0;
+        await ReloadReferenceDataAsync();
+        await LoadPartiesAsync();
+    }
+
+    private void AcquireLock()
+    {
+        var ok = ModuleLockService.TryAcquire(GraphicModule.Faldon, NormalizedOperatorId);
+        feedbackMessage = ok
+            ? $"Modulo Faldon bloqueado por {NormalizedOperatorId}."
+            : "No se puede bloquear Faldon (ya tiene owner).";
+        feedbackIsError = !ok;
+    }
+
+    private void ReleaseLock()
+    {
+        var ok = ModuleLockService.Release(GraphicModule.Faldon, NormalizedOperatorId);
+        feedbackMessage = ok
+            ? "Modulo Faldon desbloqueado."
+            : "No se puede desbloquear Faldon (solo owner).";
+        feedbackIsError = !ok;
+    }
+
+    private SnapshotQuery BuildQuery()
+    {
+        return new SnapshotQuery
+        {
+            ElectionSlot = selectedElectionSlot,
+            ConnectionType = selectedConnectionType,
+            Kind = SnapshotQueryKind.Circunscripcion,
+            CircunscripcionCodigo = selectedCircunscripcionCodigo,
+            Avance = selectedAvance == 0 ? null : selectedAvance,
+            IncludeZeroSeats = false,
+            MedioCodigo = selectedMedioCodigo.Trim()
+        };
+    }
+
+    private static IReadOnlyList<MedioSummary> BuildMediosForUi(IReadOnlyList<MedioSummary> loadedMedios)
+    {
+        var list = new List<MedioSummary> { new("RTVE", "RTVE") };
+        list.AddRange(
+            loadedMedios
+                .Where(x => !string.IsNullOrWhiteSpace(x.Codigo))
+                .Where(x => !string.Equals(x.Codigo, "RTVE", StringComparison.OrdinalIgnoreCase))
+                .DistinctBy(x => x.Codigo)
+                .Select(x => new MedioSummary(
+                    x.Codigo.Trim(),
+                    string.IsNullOrWhiteSpace(x.Descripcion) ? x.Codigo.Trim() : x.Descripcion.Trim())));
+        return list;
+    }
+
+    private int ResolveIntFromConfig(string key, int fallback, int min, int max)
+    {
+        var raw = Configuration[key];
+        if (!int.TryParse(raw, out var parsed))
+        {
+            return fallback;
+        }
+
+        return Math.Clamp(parsed, min, max);
+    }
+
+    public void Dispose()
+    {
+    }
+}

@@ -4,9 +4,15 @@ namespace Elecciones.Application.Abstractions;
 
 public interface IEleccionesDataService
 {
-    Task<IReadOnlyList<CircunscripcionSummary>> GetCircunscripcionesAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<CircunscripcionSummary>> GetCircunscripcionesAsync(
+        int electionSlot = 1,
+        int connectionType = 0,
+        CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<MedioSummary>> GetMediosAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<MedioSummary>> GetMediosAsync(
+        int electionSlot = 1,
+        int connectionType = 0,
+        CancellationToken cancellationToken = default);
 
     Task<BrainStormSnapshot> GetSnapshotAsync(
         SnapshotQuery query,

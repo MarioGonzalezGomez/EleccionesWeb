@@ -6,6 +6,7 @@ public sealed class PartidoEntity
     public string Siglas { get; set; } = string.Empty;
     public string Nombre { get; set; } = string.Empty;
     public string Padre { get; set; } = string.Empty;
+    public string Candidato { get; set; } = string.Empty;
 
     public ICollection<CircunscripcionPartidoEntity> Circunscripciones { get; set; } = [];
 }

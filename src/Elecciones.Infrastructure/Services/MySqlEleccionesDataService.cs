@@ -2,31 +2,45 @@
 using Elecciones.Application.Models;
 using Elecciones.Infrastructure.Data;
 using Elecciones.Infrastructure.Entities;
+using Elecciones.Infrastructure.Options;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Elecciones.Infrastructure.Services;
 
 public sealed class MySqlEleccionesDataService : IEleccionesDataService
 {
-    private readonly IDbContextFactory<EleccionesDbContext> _dbContextFactory;
+    private readonly DatabaseOptions _databaseOptions;
     private readonly ILogger<MySqlEleccionesDataService> _logger;
 
     public MySqlEleccionesDataService(
-        IDbContextFactory<EleccionesDbContext> dbContextFactory,
+        IOptions<DatabaseOptions> databaseOptions,
         ILogger<MySqlEleccionesDataService> logger)
     {
-        _dbContextFactory = dbContextFactory;
+        _databaseOptions = databaseOptions.Value;
         _logger = logger;
     }
 
-    public async Task<IReadOnlyList<CircunscripcionSummary>> GetCircunscripcionesAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<CircunscripcionSummary>> GetCircunscripcionesAsync(int electionSlot = 1, int connectionType = 0, CancellationToken cancellationToken = default)
     {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var db = CreateDbContextForElection(electionSlot, connectionType);
 
-        var data = await db.Circunscripciones
+        var query = db.Circunscripciones
             .AsNoTracking()
-            .Where(x => !string.IsNullOrEmpty(x.Nombre))
+            .Where(x => !string.IsNullOrEmpty(x.Nombre));
+
+        var regionalCode = ResolveRegionalCode(electionSlot);
+        var mustFilterByRegional =
+            (!string.IsNullOrWhiteSpace(regionalCode) && _databaseOptions.TipoElecciones == 2)
+            || (!string.IsNullOrWhiteSpace(regionalCode) && _databaseOptions.Regional);
+
+        if (mustFilterByRegional)
+        {
+            query = query.Where(x => x.Codigo.StartsWith(regionalCode));
+        }
+
+        var data = await query
             .OrderBy(x => x.Nombre)
             .Select(x => new CircunscripcionSummary(x.Codigo, x.Nombre))
             .ToListAsync(cancellationToken);
@@ -34,9 +48,9 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         return data;
     }
 
-    public async Task<IReadOnlyList<MedioSummary>> GetMediosAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<MedioSummary>> GetMediosAsync(int electionSlot = 1, int connectionType = 0, CancellationToken cancellationToken = default)
     {
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var db = CreateDbContextForElection(electionSlot, connectionType);
 
         var data = await db.Medios
             .AsNoTracking()
@@ -58,7 +72,7 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
     {
         query ??= new SnapshotQuery();
 
-        await using var db = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using var db = CreateDbContextForElection(query.ElectionSlot, query.ConnectionType);
 
         var baseQuery = db.CircunscripcionPartidos
             .AsNoTracking()
@@ -95,16 +109,29 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             contextCirc.Codigo,
             partidos.Count);
 
+        var avance = ResolveAvance(contextCirc);
+        if (query.Avance is >= 1 and <= 4)
+        {
+            avance = query.Avance.Value;
+        }
+        var participacion = await ResolveParticipacionDataAsync(db, contextCirc, avance, query.ElectionSlot, cancellationToken);
+
         return new BrainStormSnapshot
         {
             Circunscripcion = new CircunscripcionSummary(contextCirc.Codigo, contextCirc.Nombre),
             Oficiales = oficiales,
-            Avance = ResolveAvance(contextCirc),
+            Avance = avance,
             Escrutado = contextCirc.Escrutado,
+            Participacion = participacion.Actual,
+            ParticipacionHistorica = participacion.Historica,
+            ParticipacionMedia = participacion.Media,
             EscaniosTotales = contextCirc.Escanios,
             MayoriaAbsoluta = contextCirc.Escanios <= 0 ? 0 : (contextCirc.Escanios / 2) + 1,
             VotantesTotales = contextCirc.Votantes,
+            VotantesFaltan = contextCirc.VotantesFaltan,
             AnioUltimasElecciones = DateTime.UtcNow.Year - 3,
+            NumPartidos = partidos.Count(p => oficiales ? p.Escanios > 0 : p.EscaniosHastaSondeo > 0),
+            NombreSondeo = query.MedioCodigo ?? string.Empty,
             GeneratedAtUtc = DateTime.UtcNow,
             Partidos = partidos,
             CsvTemplatePartidos = csvTemplatePartidos
@@ -243,13 +270,21 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
     {
         var mapped = cps.Select(x => new PartidoSnapshot(
                 x.CodPartido,
-                x.Partido != null ? x.Partido.Siglas : x.CodPartido,
+                x.Partido?.Padre ?? string.Empty,
+                x.Partido?.Siglas ?? x.CodPartido,
+                x.Partido?.Nombre ?? string.Empty,
+                x.Partido?.Candidato ?? string.Empty,
                 x.EscaniosHasta,
                 x.EscaniosDesdeSondeo,
                 x.EscaniosHastaSondeo,
                 x.EscaniosHistoricos,
                 oficiales ? x.Votos : x.VotosSondeo,
-                x.Votantes))
+                x.VotosHist,
+                x.Votantes,
+                x.VotantesHist,
+                x.Restos,
+                x.EsUltimoEscano,
+                x.LuchaUltimoEscano))
             .ToList();
 
         if (!includeZeroSeats && query.Kind == SnapshotQueryKind.Circunscripcion)
@@ -361,6 +396,126 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         return [];
     }
 
+    private EleccionesDbContext CreateDbContextForElection(int electionSlot, int requestedConnectionType)
+    {
+        var connectionType = ResolveConnectionType(electionSlot, requestedConnectionType);
+        var selectedHost = ResolveHost(connectionType);
+        var selectedDatabase = ResolveDatabaseName(electionSlot);
+
+        var connectionString =
+            $"server={selectedHost};port={_databaseOptions.Port};uid={_databaseOptions.User};pwd={_databaseOptions.Password};database={selectedDatabase};";
+
+        var builder = new DbContextOptionsBuilder<EleccionesDbContext>();
+        builder.UseMySQL(connectionString, mysql =>
+        {
+            mysql.CommandTimeout(_databaseOptions.CommandTimeoutSeconds);
+        });
+
+        return new EleccionesDbContext(builder.Options);
+    }
+
+    private int ResolveConnectionType(int electionSlot, int requestedConnectionType)
+    {
+        if (requestedConnectionType is >= 1 and <= 3)
+        {
+            return requestedConnectionType;
+        }
+
+        var slot = electionSlot is >= 1 and <= 3 ? electionSlot : 1;
+        var configured = slot switch
+        {
+            2 => _databaseOptions.ConnectionDefault2,
+            3 => _databaseOptions.ConnectionDefault3,
+            _ => _databaseOptions.ConnectionDefault1
+        };
+
+        return configured is >= 1 and <= 3 ? configured : 1;
+    }
+
+    private string ResolveHost(int connectionType)
+    {
+        return connectionType switch
+        {
+            2 when !string.IsNullOrWhiteSpace(_databaseOptions.HostBackup) => _databaseOptions.HostBackup.Trim(),
+            3 when !string.IsNullOrWhiteSpace(_databaseOptions.HostLocal) => _databaseOptions.HostLocal.Trim(),
+            3 => "127.0.0.1",
+            _ => _databaseOptions.Host.Trim()
+        };
+    }
+
+    private string ResolveRegionalCode(int electionSlot)
+    {
+        var slot = electionSlot is >= 1 and <= 3 ? electionSlot : 1;
+        var raw = slot switch
+        {
+            2 => _databaseOptions.CodigoRegionalBD2,
+            3 => _databaseOptions.CodigoRegionalBD3,
+            _ => _databaseOptions.CodigoRegionalBD1
+        };
+
+        return raw?.Trim() ?? string.Empty;
+    }
+
+    private async Task<(double Actual, double Historica, double Media)> ResolveParticipacionDataAsync(
+        EleccionesDbContext db,
+        CircunscripcionEntity contextCirc,
+        int avance,
+        int electionSlot,
+        CancellationToken cancellationToken)
+    {
+        var parentCode = ResolveParentCircunscripcionCode(contextCirc, electionSlot);
+        CircunscripcionEntity? parent = null;
+        if (!string.IsNullOrWhiteSpace(parentCode))
+        {
+            parent = await db.Circunscripciones
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Codigo == parentCode, cancellationToken);
+        }
+
+        var mediaFallback = parent ?? contextCirc;
+
+        return avance switch
+        {
+            1 => (contextCirc.Avance1, contextCirc.Avance1Hist, mediaFallback.Avance1),
+            2 => (contextCirc.Avance2, contextCirc.Avance2Hist, mediaFallback.Avance2),
+            3 => (contextCirc.Avance3, contextCirc.Avance3Hist, mediaFallback.Avance3),
+            _ => (contextCirc.Participacion, contextCirc.ParticipacionHist, mediaFallback.Participacion)
+        };
+    }
+
+    private string ResolveParentCircunscripcionCode(CircunscripcionEntity contextCirc, int electionSlot)
+    {
+        if (_databaseOptions.TipoElecciones == 1)
+        {
+            return "9900000";
+        }
+
+        if (!string.IsNullOrWhiteSpace(contextCirc.Comunidad))
+        {
+            return $"{contextCirc.Comunidad.Trim()}00000";
+        }
+
+        var regionalCode = ResolveRegionalCode(electionSlot);
+        return string.IsNullOrWhiteSpace(regionalCode) ? "9900000" : $"{regionalCode}00000";
+    }
+
+    private string ResolveDatabaseName(int electionSlot)
+    {
+        var slot = electionSlot is >= 1 and <= 3 ? electionSlot : 1;
+
+        var db1 = _databaseOptions.Name?.Trim() ?? string.Empty;
+        var db2 = _databaseOptions.Name2?.Trim() ?? string.Empty;
+        var db3 = _databaseOptions.Name3?.Trim() ?? string.Empty;
+
+        return slot switch
+        {
+            2 when !string.IsNullOrWhiteSpace(db2) => db2,
+            3 when !string.IsNullOrWhiteSpace(db3) => db3,
+            3 when !string.IsNullOrWhiteSpace(db2) => db2,
+            _ => db1
+        };
+    }
+
     private static int ResolveAvance(CircunscripcionEntity circ)
     {
         if (circ.Avance3 > 0) return 3;
@@ -422,3 +577,5 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         }
     }
 }
+
+

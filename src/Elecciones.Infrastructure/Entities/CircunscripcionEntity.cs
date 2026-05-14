@@ -9,8 +9,12 @@ public sealed class CircunscripcionEntity
     public int Avance1 { get; set; }
     public int Avance2 { get; set; }
     public int Avance3 { get; set; }
+    public double Avance1Hist { get; set; }
+    public double Avance2Hist { get; set; }
+    public double Avance3Hist { get; set; }
     public double Participacion { get; set; }
     public int Votantes { get; set; }
+    public int VotantesFaltan { get; set; }
     public double ParticipacionHist { get; set; }
     public string Comunidad { get; set; } = string.Empty;
 

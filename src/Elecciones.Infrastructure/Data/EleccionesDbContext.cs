@@ -31,8 +31,12 @@ public sealed class EleccionesDbContext : DbContext
             entity.Property(x => x.Avance1).HasColumnName("avance1");
             entity.Property(x => x.Avance2).HasColumnName("avance2");
             entity.Property(x => x.Avance3).HasColumnName("avance3");
+            entity.Property(x => x.Avance1Hist).HasColumnName("avance1_hist");
+            entity.Property(x => x.Avance2Hist).HasColumnName("avance2_hist");
+            entity.Property(x => x.Avance3Hist).HasColumnName("avance3_hist");
             entity.Property(x => x.Participacion).HasColumnName("participacion");
             entity.Property(x => x.Votantes).HasColumnName("votantes");
+            entity.Property(x => x.VotantesFaltan).HasColumnName("votantes_faltan");
             entity.Property(x => x.ParticipacionHist).HasColumnName("participacion_hist");
             entity.Property(x => x.Comunidad).HasColumnName("COMUNIDAD");
         });
@@ -46,6 +50,7 @@ public sealed class EleccionesDbContext : DbContext
             entity.Property(x => x.Siglas).HasColumnName("sigla");
             entity.Property(x => x.Nombre).HasColumnName("descripcion");
             entity.Property(x => x.Padre).HasColumnName("padre");
+            entity.Property(x => x.Candidato).HasColumnName("candidato");
         });
 
         modelBuilder.Entity<CircunscripcionPartidoEntity>(entity =>
@@ -61,7 +66,10 @@ public sealed class EleccionesDbContext : DbContext
             entity.Property(x => x.EscaniosHistoricos).HasColumnName("escanos_hasta_hist");
             entity.Property(x => x.Votos).HasColumnName("votos");
             entity.Property(x => x.VotosSondeo).HasColumnName("votos_sondeo");
+            entity.Property(x => x.VotosHist).HasColumnName("votos_hist");
             entity.Property(x => x.Votantes).HasColumnName("votantes");
+            entity.Property(x => x.VotantesHist).HasColumnName("votantes_hist");
+            entity.Property(x => x.Restos).HasColumnName("restos");
             entity.Property(x => x.EsUltimoEscano).HasColumnName("ult_escano");
             entity.Property(x => x.LuchaUltimoEscano).HasColumnName("sig_escano");
 

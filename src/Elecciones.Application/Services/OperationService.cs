@@ -74,6 +74,8 @@ public sealed class OperationService : IOperationService
             cancellationToken);
 
         var csvPath = await _csvWriter.WriteAsync(snapshot, request.ExportName, cancellationToken);
+        await _csvWriter.WriteRecuentosJsonAsync(snapshot, cancellationToken);
+        await WriteSedesCsvIfNeededAsync(request, snapshot, cancellationToken);
 
         var signal = _signalComposer.Compose(request, snapshot);
         var dispatchedTargets = await _graphicsGateway.SendAsync(request.Target, signal, cancellationToken);
@@ -88,6 +90,24 @@ public sealed class OperationService : IOperationService
             Signal = signal,
             DispatchedTargets = dispatchedTargets
         };
+    }
+
+    private async Task WriteSedesCsvIfNeededAsync(
+        OperationRequest request,
+        BrainStormSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        if (request.Command is not (GraphicCommand.SedesEntra or GraphicCommand.SedesEncadena))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.CommandValue))
+        {
+            return;
+        }
+
+        await _csvWriter.WriteSedesAsync(snapshot, request.CommandValue, cancellationToken);
     }
 
     private static string BuildResultMessage(IReadOnlyList<string> dispatchedTargets)

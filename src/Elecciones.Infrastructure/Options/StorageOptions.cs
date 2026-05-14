@@ -5,4 +5,7 @@ public sealed class StorageOptions
     public const string SectionName = "Storage";
 
     public string CsvFolder { get; set; } = "Data/CSV";
+    public string JsonFolder { get; set; } = "Data/JSON";
+    public bool EnableRecuentosJson { get; set; } = true;
+    public string RecuentosJsonFileName { get; set; } = "datos_escrutado";
 }

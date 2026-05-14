@@ -8,4 +8,13 @@ public interface IBrainStormCsvWriter
         BrainStormSnapshot snapshot,
         string exportName,
         CancellationToken cancellationToken = default);
+
+    Task<string?> WriteSedesAsync(
+        BrainStormSnapshot snapshot,
+        string partyToken,
+        CancellationToken cancellationToken = default);
+
+    Task<string?> WriteRecuentosJsonAsync(
+        BrainStormSnapshot snapshot,
+        CancellationToken cancellationToken = default);
 }

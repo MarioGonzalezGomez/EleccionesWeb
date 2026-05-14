@@ -7,10 +7,11 @@
 @inject IOperationService OperationService
 @inject IEleccionesDataService DataService
 @inject IOperatorAuthorizationService AuthorizationService
+@inject IConfiguration Configuration
 
 <PageTitle>Operacion</PageTitle>
 
-<h1>Operacion multioperador</h1>
+<h1>@GetPageTitle()</h1>
 
 @if (!string.IsNullOrWhiteSpace(feedbackMessage))
 {
@@ -24,6 +25,24 @@
 </div>
 
 <div class="row g-3 mb-3">
+    <div class="col-12 col-md-2">
+        <label class="form-label">Eleccion activa</label>
+        <select class="form-select" value="@selectedElectionSlot" @onchange="OnElectionSlotChanged">
+            @foreach (var slot in availableElectionSlots)
+            {
+                <option value="@slot">Eleccion @slot</option>
+            }
+        </select>
+    </div>
+    <div class="col-12 col-md-2">
+        <label class="form-label">Origen BD</label>
+        <select class="form-select" value="@selectedConnectionType" @onchange="OnConnectionTypeChanged">
+            <option value="0">Auto</option>
+            <option value="1">Principal</option>
+            <option value="2">Reserva</option>
+            <option value="3">Local</option>
+        </select>
+    </div>
     <div class="col-12 col-md-3">
         <label class="form-label">Operador</label>
         <input class="form-control" @bind="operatorId" />
@@ -96,6 +115,23 @@
     </div>
 </div>
 
+<div class="row g-3 mb-4">
+    <div class="col-12 col-md-3">
+        <label class="form-label">Avance</label>
+        <select class="form-select" @bind="selectedAvance">
+            <option value="0">Automatico</option>
+            <option value="1">Avance 1</option>
+            <option value="2">Avance 2</option>
+            <option value="3">Avance 3</option>
+            <option value="4">Final</option>
+        </select>
+    </div>
+    <div class="col-12 col-md-3">
+        <label class="form-label">Cuenta atras (seg)</label>
+        <input class="form-control" type="number" min="0" @bind="sceneSeconds" />
+    </div>
+</div>
+
 <div class="row g-4">
     <div class="col-12 col-xl-5">
         <h4>Bloqueo de modulos</h4>
@@ -110,7 +146,7 @@
                 </tr>
             </thead>
             <tbody>
-                @foreach (var state in moduleStates)
+                @foreach (var state in GetVisibleModuleStates())
                 {
                     var mine = IsMine(state);
                     var canOperate = CanOperateModule(state.Module);
@@ -140,6 +176,133 @@
     </div>
 
     <div class="col-12 col-xl-7">
+        @if (TryGetSpecializedModule(out var specializedModule))
+        {
+            <h4>Atajos de @specializedModule</h4>
+            <div class="d-flex flex-wrap gap-2 mb-3">
+                @foreach (var shortcut in GetShortcuts(specializedModule))
+                {
+                    <button class="btn btn-sm btn-outline-primary"
+                            @onclick="() => RunShortcutAsync(shortcut)"
+                            disabled="@(!ModuleLockService.IsOwner(shortcut.Module, NormalizedOperatorId) || !CanOperateModule(shortcut.Module))">
+                        @shortcut.Label
+                    </button>
+                }
+            </div>
+
+            <div class="border rounded p-3 mb-3">
+                <div class="row g-2 align-items-end">
+                    <div class="col-12 col-md-6">
+                        <label class="form-label form-label-sm">Grafico activo (datos apoyo)</label>
+                        <select class="form-select form-select-sm"
+                                value="@GetActiveGraphic(specializedModule)"
+                                @onchange="args => OnActiveGraphicChanged(specializedModule, args)">
+                            @foreach (var graphic in GetSupportGraphics(specializedModule))
+                            {
+                                <option value="@graphic">@graphic</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <button class="btn btn-sm btn-outline-secondary"
+                                @onclick="() => RefreshSupportDataAsync(specializedModule)"
+                                disabled="@supportDataLoading">
+                            @(supportDataLoading ? "Cargando..." : "Refrescar tabla apoyo")
+                        </button>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(supportDataError))
+                {
+                    <div class="alert alert-danger mt-2 mb-0" role="alert">@supportDataError</div>
+                }
+                else if (supportDataModule == specializedModule && supportDataRows.Count > 0)
+                {
+                    <div class="small text-muted mt-2">
+                        Actualizado (UTC): @FormatUtc(supportDataUpdatedUtc)
+                    </div>
+
+                    <div class="d-flex flex-wrap gap-2 mt-2">
+                        @if (IsActiveGraphic(specializedModule, "SEDES"))
+                        {
+                            <button class="btn btn-sm btn-outline-success"
+                                    @onclick="() => RunSupportSedesAsync(specializedModule, false)"
+                                    disabled="@(!CanUseSupportActions(specializedModule))">
+                                Sedes Entra
+                            </button>
+                            <button class="btn btn-sm btn-outline-primary"
+                                    @onclick="() => RunSupportSedesAsync(specializedModule, true)"
+                                    disabled="@(!CanUseSupportActions(specializedModule))">
+                                Sedes Encadena
+                            </button>
+                            <button class="btn btn-sm btn-outline-warning"
+                                    @onclick="() => RunSupportCommandAsync(specializedModule, GraphicCommand.SedesSale)"
+                                    disabled="@(!ModuleLockService.IsOwner(specializedModule, NormalizedOperatorId) || !CanOperateModule(specializedModule))">
+                                Sedes Sale
+                            </button>
+                        }
+                        @if (IsActiveGraphic(specializedModule, "ULTIMO ESCANO") && specializedModule == GraphicModule.Carton)
+                        {
+                            <button class="btn btn-sm btn-outline-success"
+                                    @onclick="() => RunSupportUltimoAsync(true)"
+                                    disabled="@(!CanUseSupportActions(specializedModule))">
+                                Ultimo Entra Izq
+                            </button>
+                            <button class="btn btn-sm btn-outline-primary"
+                                    @onclick="() => RunSupportUltimoAsync(false)"
+                                    disabled="@(!CanUseSupportActions(specializedModule))">
+                                Ultimo Entra Der
+                            </button>
+                            <button class="btn btn-sm btn-outline-warning"
+                                    @onclick="() => RunSupportCommandAsync(specializedModule, GraphicCommand.UltimoLimpiaPartidos)"
+                                    disabled="@(!ModuleLockService.IsOwner(specializedModule, NormalizedOperatorId) || !CanOperateModule(specializedModule))">
+                                Ultimo Limpia
+                            </button>
+                        }
+                    </div>
+
+                    @if (GetSelectedSupportParty(specializedModule) is not null)
+                    {
+                        <div class="small text-muted mt-2">
+                            @GetSelectedSupportPartyText(specializedModule)
+                        </div>
+                    }
+
+                    <div class="table-responsive mt-2">
+                        <table class="table table-sm table-striped align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Codigo</th>
+                                    <th>Siglas</th>
+                                    <th>Esc</th>
+                                    <th>Desde</th>
+                                    <th>Hasta</th>
+                                    <th>Ultimo</th>
+                                    <th>Siguiente</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var partido in GetFilteredSupportRows(specializedModule))
+                                {
+                                    <tr class="@(IsSupportRowSelected(specializedModule, partido) ? "table-primary" : null)"
+                                        @onclick="() => OnSupportRowClick(specializedModule, partido)"
+                                        @ondblclick="() => OnSupportRowDoubleClickAsync(specializedModule, partido)">
+                                        <td>@partido.Codigo</td>
+                                        <td>@partido.Siglas</td>
+                                        <td>@GetDisplayEscanos(partido)</td>
+                                        <td>@partido.EscaniosDesdeSondeo</td>
+                                        <td>@partido.EscaniosHastaSondeo</td>
+                                        <td>@(partido.EsUltimoEscano != 0 ? "Si" : "")</td>
+                                        <td>@(partido.LuchaUltimoEscano != 0 ? "Si" : "")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        }
+
         <h4>Botonera por modulo</h4>
 
         @foreach (var module in Enum.GetValues<GraphicModule>())
@@ -229,7 +392,13 @@
     private string selectedMedioCodigo = "RTVE";
     private string autonomiaCodigo = string.Empty;
     private string partidoCodigo = string.Empty;
+    private int selectedAvance;
+    private int selectedElectionSlot = 1;
+    private int numEleccionesSimultaneas = 1;
+    private int selectedConnectionType;
+    private int sceneSeconds;
     private bool includeZeroSeats;
+    private IEnumerable<int> availableElectionSlots => Enumerable.Range(1, Math.Clamp(numEleccionesSimultaneas, 1, 3));
     private bool RequiresAutonomia => queryKind is SnapshotQueryKind.MasVotadosProvincias or SnapshotQueryKind.PartidoProvincias;
     private bool RequiresPartido => queryKind is SnapshotQueryKind.PartidoAutonomias or SnapshotQueryKind.PartidoProvincias;
 
@@ -253,6 +422,13 @@
             GraphicCommand.TickerHistoricosSale,
             GraphicCommand.TickerFotosEntra,
             GraphicCommand.TickerFotosSale,
+            GraphicCommand.TickerTDEntra,
+            GraphicCommand.TickerTDActualiza,
+            GraphicCommand.TickerTDSale,
+            GraphicCommand.VideoIn,
+            GraphicCommand.VideoOut,
+            GraphicCommand.VideoInTodos,
+            GraphicCommand.VideoOutTodos,
             GraphicCommand.SedesEntra,
             GraphicCommand.SedesEncadena,
             GraphicCommand.SedesSale,
@@ -262,7 +438,18 @@
             GraphicCommand.PactosEntraIzquierda,
             GraphicCommand.PactosEntraDerecha,
             GraphicCommand.PactosSaleIzquierda,
-            GraphicCommand.PactosSaleDerecha
+            GraphicCommand.PactosSaleDerecha,
+            GraphicCommand.PrimerosResultadosActiva,
+            GraphicCommand.PrimerosResultadosDesactiva,
+            GraphicCommand.AnimacionSondeoActiva,
+            GraphicCommand.AnimacionSondeoDesactiva,
+            GraphicCommand.DeSondeoAOficiales,
+            GraphicCommand.CambioEleccionesEuropa,
+            GraphicCommand.CambioEleccionesNacional,
+            GraphicCommand.PrimeSubirRotulosTD,
+            GraphicCommand.PrimeBajarRotulosTD,
+            GraphicCommand.PrimeSubirRotulosEspeciales,
+            GraphicCommand.PrimeBajarRotulosEspeciales
         ],
         [GraphicModule.Carton] =
         [
@@ -280,8 +467,15 @@
 
     private readonly Dictionary<GraphicModule, string> selectedScenes = new();
     private readonly Dictionary<GraphicModule, string> commandValues = new();
+    private readonly Dictionary<GraphicModule, string> activeGraphics = new();
 
     private OperationResult? lastResult;
+    private IReadOnlyList<PartidoSnapshot> supportDataRows = [];
+    private GraphicModule? supportDataModule;
+    private DateTime? supportDataUpdatedUtc;
+    private readonly Dictionary<GraphicModule, string> selectedSupportPartyCodes = new();
+    private bool supportDataLoading;
+    private string supportDataError = string.Empty;
     [Parameter] public string? moduleHint { get; set; }
 
     private string NormalizedOperatorId => operatorId.Trim();
@@ -297,20 +491,19 @@
 
     protected override async Task OnInitializedAsync()
     {
+        numEleccionesSimultaneas = ResolveIntFromConfig("Database:NumEleccionesSimultaneas", 1, 1, 3);
+        selectedElectionSlot = ResolveIntFromConfig("Database:DefaultElectionSlot", 1, 1, numEleccionesSimultaneas);
+
         moduleStates = ModuleLockService.GetStates();
         ModuleLockService.LocksChanged += OnLocksChanged;
 
-        circunscripciones = await DataService.GetCircunscripcionesAsync();
-        selectedCircunscripcionCodigo = circunscripciones.FirstOrDefault()?.Codigo ?? string.Empty;
-
-        var loadedMedios = await DataService.GetMediosAsync();
-        medios = BuildMediosForUi(loadedMedios);
-        selectedMedioCodigo = medios.FirstOrDefault()?.Codigo ?? "RTVE";
+        await ReloadReferenceDataAsync();
 
         foreach (var module in Enum.GetValues<GraphicModule>())
         {
             selectedScenes[module] = GetScenes(module).FirstOrDefault() ?? string.Empty;
             commandValues[module] = string.Empty;
+            activeGraphics[module] = GetSupportGraphics(module).FirstOrDefault() ?? "FICHAS";
         }
     }
 
@@ -340,12 +533,347 @@
 
     private bool ShowModule(GraphicModule module)
     {
-        if (string.IsNullOrWhiteSpace(moduleHint))
+        if (!TryGetSpecializedModule(out var specialized))
         {
             return true;
         }
 
-        return string.Equals(moduleHint, module.ToString(), StringComparison.OrdinalIgnoreCase);
+        return module == specialized;
+    }
+
+    private bool TryGetSpecializedModule(out GraphicModule module)
+    {
+        module = default;
+        if (string.IsNullOrWhiteSpace(moduleHint))
+        {
+            return false;
+        }
+
+        foreach (var value in Enum.GetValues<GraphicModule>())
+        {
+            if (string.Equals(moduleHint, value.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                module = value;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private IReadOnlyList<ModuleLockInfo> GetVisibleModuleStates()
+    {
+        if (!TryGetSpecializedModule(out var module))
+        {
+            return moduleStates;
+        }
+
+        return moduleStates.Where(x => x.Module == module).ToList();
+    }
+
+    private string GetPageTitle()
+    {
+        return TryGetSpecializedModule(out var module)
+            ? $"Operacion {module}"
+            : "Operacion multioperador";
+    }
+
+    private IReadOnlyList<ShortcutAction> GetShortcuts(GraphicModule module)
+    {
+        return module switch
+        {
+            GraphicModule.Faldon =>
+            [
+                new("Ticker ENTRA", module, "TICKER", Action: OperationActionType.Enter),
+                new("Ticker ACTUALIZA", module, "TICKER", Action: OperationActionType.Update),
+                new("Ticker SALE", module, "TICKER", Action: OperationActionType.Exit),
+                new("CuentaAtras PREPARA", module, "CuentaAtras", Action: OperationActionType.Prepare),
+                new("CuentaAtras ENTRA", module, "CuentaAtras", Action: OperationActionType.Enter),
+                new("CuentaAtras SALE", module, "CuentaAtras", Action: OperationActionType.Exit),
+                new("Pactos ENTRA", module, "Pactometro", Command: GraphicCommand.PactosEntra),
+                new("Pactos SALE", module, "Pactometro", Command: GraphicCommand.PactosSale)
+            ],
+            GraphicModule.Carton =>
+            [
+                new("Participacion ENTRA", module, "PARTICIPACION", Action: OperationActionType.Enter),
+                new("Participacion ENCADENA", module, "PARTICIPACION", Action: OperationActionType.Update),
+                new("Participacion SALE", module, "PARTICIPACION", Action: OperationActionType.Exit),
+                new("Carrusel ENTRA", module, "CARRUSEL", Action: OperationActionType.Enter),
+                new("Carrusel SALE", module, "CARRUSEL", Action: OperationActionType.Exit),
+                new("Ultimo ENTRA", module, "ULTIMO_ESCANO", Action: OperationActionType.Enter),
+                new("Ultimo SALE", module, "ULTIMO_ESCANO", Action: OperationActionType.Exit)
+            ],
+            GraphicModule.Superfaldon =>
+            [
+                new("Superfaldon ENTRA", module, "SUPERFALDON", Action: OperationActionType.Enter),
+                new("Superfaldon ACTUALIZA", module, "SUPERFALDON", Action: OperationActionType.Update),
+                new("Superfaldon SALE", module, "SUPERFALDON", Action: OperationActionType.Exit),
+                new("Ultimo ENTRA", module, "ULTIMOESCANO", Action: OperationActionType.Enter),
+                new("Ultimo SALE", module, "ULTIMOESCANO", Action: OperationActionType.Exit)
+            ],
+            _ => []
+        };
+    }
+
+    private async Task RunShortcutAsync(ShortcutAction shortcut)
+    {
+        if (!CanOperateModule(shortcut.Module))
+        {
+            feedbackMessage = $"No tienes permisos para operar el modulo {shortcut.Module}.";
+            feedbackIsError = true;
+            return;
+        }
+
+        if (!ModuleLockService.IsOwner(shortcut.Module, NormalizedOperatorId))
+        {
+            feedbackMessage = $"No puedes operar {shortcut.Module}. Bloquealo primero con tu usuario.";
+            feedbackIsError = true;
+            return;
+        }
+
+        var request = new OperationRequest
+        {
+            OperatorId = NormalizedOperatorId,
+            Module = shortcut.Module,
+            Scene = shortcut.Scene,
+            Action = shortcut.Action ?? OperationActionType.Update,
+            SceneSeconds = sceneSeconds > 0 ? sceneSeconds : null,
+            Command = shortcut.Command,
+            CommandValue = shortcut.CommandValue ?? string.Empty,
+            Target = selectedTarget,
+            Oficiales = oficiales,
+            ExportName = string.IsNullOrWhiteSpace(exportName) ? "BrainStorm" : exportName.Trim(),
+            Query = BuildQuery()
+        };
+
+        await ExecuteAsync(request);
+    }
+
+    private IReadOnlyList<string> GetSupportGraphics(GraphicModule module)
+    {
+        return module switch
+        {
+            GraphicModule.Faldon => ["FICHAS", "SEDES", "ULTIMO ESCANO"],
+            GraphicModule.Carton => ["PARTICIPACION", "FICHAS", "CARTON PARTIDOS", "ULTIMO ESCANO"],
+            GraphicModule.Superfaldon => ["FICHAS", "SEDES", "ULTIMO ESCANO"],
+            _ => ["FICHAS"]
+        };
+    }
+
+    private string GetActiveGraphic(GraphicModule module)
+    {
+        if (activeGraphics.TryGetValue(module, out var value) && !string.IsNullOrWhiteSpace(value))
+        {
+            return value;
+        }
+
+        var fallback = GetSupportGraphics(module).FirstOrDefault() ?? "FICHAS";
+        activeGraphics[module] = fallback;
+        return fallback;
+    }
+
+    private void OnActiveGraphicChanged(GraphicModule module, ChangeEventArgs args)
+    {
+        var selected = args.Value?.ToString()?.Trim();
+        if (string.IsNullOrWhiteSpace(selected))
+        {
+            return;
+        }
+
+        activeGraphics[module] = selected;
+    }
+
+    private async Task RefreshSupportDataAsync(GraphicModule module)
+    {
+        supportDataLoading = true;
+        supportDataError = string.Empty;
+        try
+        {
+            var snapshot = await DataService.GetSnapshotAsync(BuildQuery(), oficiales);
+            supportDataRows = snapshot.Partidos;
+            supportDataModule = module;
+            supportDataUpdatedUtc = DateTime.UtcNow;
+            var first = GetFilteredSupportRows(module).FirstOrDefault();
+            if (first is not null)
+            {
+                selectedSupportPartyCodes[module] = first.Codigo;
+            }
+        }
+        catch (Exception ex)
+        {
+            supportDataError = $"Error al cargar datos de apoyo: {ex.Message}";
+        }
+        finally
+        {
+            supportDataLoading = false;
+        }
+    }
+
+    private IReadOnlyList<PartidoSnapshot> GetFilteredSupportRows(GraphicModule module)
+    {
+        if (supportDataModule != module)
+        {
+            return [];
+        }
+
+        var activeGraphic = GetActiveGraphic(module).ToUpperInvariant();
+        var rows = supportDataRows.Where(x => !string.IsNullOrWhiteSpace(x.Codigo));
+
+        return activeGraphic switch
+        {
+            "SEDES" => rows
+                .Where(x => GetDisplayEscanos(x) > 0)
+                .OrderByDescending(GetDisplayEscanos)
+                .ThenByDescending(x => x.Votos)
+                .ToList(),
+            "ULTIMO ESCANO" => rows
+                .OrderByDescending(x => x.EsUltimoEscano)
+                .ThenByDescending(x => x.LuchaUltimoEscano)
+                .ThenByDescending(GetDisplayEscanos)
+                .ThenByDescending(x => x.Votos)
+                .ToList(),
+            "PARTICIPACION" => rows
+                .OrderBy(x => x.Codigo, StringComparer.Ordinal)
+                .ToList(),
+            _ => rows
+                .OrderByDescending(GetDisplayEscanos)
+                .ThenByDescending(x => x.Votos)
+                .ToList()
+        };
+    }
+
+    private int GetDisplayEscanos(PartidoSnapshot partido)
+    {
+        return oficiales ? partido.Escanios : partido.EscaniosHastaSondeo;
+    }
+
+    private bool IsActiveGraphic(GraphicModule module, string graphic)
+    {
+        return string.Equals(
+            GetActiveGraphic(module),
+            graphic,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool CanUseSupportActions(GraphicModule module)
+    {
+        return GetSelectedSupportParty(module) is not null
+            && ModuleLockService.IsOwner(module, NormalizedOperatorId)
+            && CanOperateModule(module);
+    }
+
+    private bool IsSupportRowSelected(GraphicModule module, PartidoSnapshot partido)
+    {
+        return selectedSupportPartyCodes.TryGetValue(module, out var selectedCode)
+               && string.Equals(selectedCode, partido.Codigo, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void OnSupportRowClick(GraphicModule module, PartidoSnapshot partido)
+    {
+        selectedSupportPartyCodes[module] = partido.Codigo;
+    }
+
+    private async Task OnSupportRowDoubleClickAsync(GraphicModule module, PartidoSnapshot partido)
+    {
+        selectedSupportPartyCodes[module] = partido.Codigo;
+        var activeGraphic = GetActiveGraphic(module).ToUpperInvariant();
+
+        if (activeGraphic == "SEDES")
+        {
+            await RunSupportSedesAsync(module, false);
+            return;
+        }
+
+        if (activeGraphic == "ULTIMO ESCANO" && module == GraphicModule.Carton)
+        {
+            await RunSupportUltimoAsync(true);
+        }
+    }
+
+    private PartidoSnapshot? GetSelectedSupportParty(GraphicModule module)
+    {
+        if (!selectedSupportPartyCodes.TryGetValue(module, out var code) || string.IsNullOrWhiteSpace(code))
+        {
+            return null;
+        }
+
+        return supportDataRows.FirstOrDefault(x =>
+            string.Equals(x.Codigo, code, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string GetSelectedSupportPartyText(GraphicModule module)
+    {
+        var selected = GetSelectedSupportParty(module);
+        if (selected is null)
+        {
+            return "Sin partido seleccionado.";
+        }
+
+        return $"Seleccionado: {selected.Siglas} ({selected.Codigo}). Doble click para acción rápida.";
+    }
+
+    private async Task RunSupportSedesAsync(GraphicModule module, bool encadena)
+    {
+        var command = encadena ? GraphicCommand.SedesEncadena : GraphicCommand.SedesEntra;
+        await RunSupportCommandAsync(module, command);
+    }
+
+    private async Task RunSupportUltimoAsync(bool izquierda)
+    {
+        var command = izquierda
+            ? GraphicCommand.UltimoEntraPartidoIzquierda
+            : GraphicCommand.UltimoEntraPartidoDerecha;
+        await RunSupportCommandAsync(GraphicModule.Carton, command);
+    }
+
+    private async Task RunSupportCommandAsync(GraphicModule module, GraphicCommand command)
+    {
+        if (!CanOperateModule(module))
+        {
+            feedbackMessage = $"No tienes permisos para operar el modulo {module}.";
+            feedbackIsError = true;
+            return;
+        }
+
+        if (!ModuleLockService.IsOwner(module, NormalizedOperatorId))
+        {
+            feedbackMessage = $"No puedes operar {module}. Bloquealo primero con tu usuario.";
+            feedbackIsError = true;
+            return;
+        }
+
+        var selected = GetSelectedSupportParty(module);
+        var commandValue = selected?.Codigo ?? string.Empty;
+
+        if (command is GraphicCommand.SedesEntra
+            or GraphicCommand.SedesEncadena
+            or GraphicCommand.UltimoEntraPartidoIzquierda
+            or GraphicCommand.UltimoEntraPartidoDerecha)
+        {
+            if (string.IsNullOrWhiteSpace(commandValue))
+            {
+                feedbackMessage = "Selecciona un partido en la tabla de apoyo para ejecutar esta accion.";
+                feedbackIsError = true;
+                return;
+            }
+        }
+
+        var request = new OperationRequest
+        {
+            OperatorId = NormalizedOperatorId,
+            Module = module,
+            Scene = selectedScenes.TryGetValue(module, out var scene) ? scene : string.Empty,
+            Action = OperationActionType.Update,
+            SceneSeconds = sceneSeconds > 0 ? sceneSeconds : null,
+            Command = command,
+            CommandValue = commandValue,
+            Target = selectedTarget,
+            Oficiales = oficiales,
+            ExportName = string.IsNullOrWhiteSpace(exportName) ? "BrainStorm" : exportName.Trim(),
+            Query = BuildQuery()
+        };
+
+        await ExecuteAsync(request);
     }
 
     private bool CanOperateModule(GraphicModule module)
@@ -380,6 +908,7 @@
             Module = module,
             Scene = selectedScenes.TryGetValue(module, out var scene) ? scene : string.Empty,
             Action = action,
+            SceneSeconds = sceneSeconds > 0 ? sceneSeconds : null,
             Command = GraphicCommand.None,
             Target = selectedTarget,
             Oficiales = oficiales,
@@ -412,6 +941,7 @@
             Module = module,
             Scene = selectedScenes.TryGetValue(module, out var scene) ? scene : string.Empty,
             Action = OperationActionType.Update,
+            SceneSeconds = sceneSeconds > 0 ? sceneSeconds : null,
             Command = command,
             CommandValue = commandValues.TryGetValue(module, out var value) ? value.Trim() : string.Empty,
             Target = selectedTarget,
@@ -434,10 +964,13 @@
     {
         return new SnapshotQuery
         {
+            ElectionSlot = selectedElectionSlot,
+            ConnectionType = selectedConnectionType,
             Kind = queryKind,
             CircunscripcionCodigo = selectedCircunscripcionCodigo,
             AutonomiaCodigo = autonomiaCodigo.Trim(),
             PartidoCodigo = partidoCodigo.Trim(),
+            Avance = selectedAvance == 0 ? null : selectedAvance,
             IncludeZeroSeats = includeZeroSeats,
             MedioCodigo = selectedMedioCodigo.Trim()
         };
@@ -480,6 +1013,13 @@
             GraphicCommand.TickerHistoricosSale => "Ticker Historicos Sale",
             GraphicCommand.TickerFotosEntra => "Ticker Fotos Entra",
             GraphicCommand.TickerFotosSale => "Ticker Fotos Sale",
+            GraphicCommand.TickerTDEntra => "Ticker TD Entra",
+            GraphicCommand.TickerTDActualiza => "Ticker TD Actualiza",
+            GraphicCommand.TickerTDSale => "Ticker TD Sale",
+            GraphicCommand.VideoIn => "Video In",
+            GraphicCommand.VideoOut => "Video Out",
+            GraphicCommand.VideoInTodos => "Video In Todos",
+            GraphicCommand.VideoOutTodos => "Video Out Todos",
             GraphicCommand.SedesEntra => "Sedes Entra",
             GraphicCommand.SedesEncadena => "Sedes Encadena",
             GraphicCommand.SedesSale => "Sedes Sale",
@@ -493,6 +1033,17 @@
             GraphicCommand.UltimoLimpiaPartidos => "Ultimo Limpia",
             GraphicCommand.UltimoEntraPartidoIzquierda => "Ultimo Entra Izq",
             GraphicCommand.UltimoEntraPartidoDerecha => "Ultimo Entra Der",
+            GraphicCommand.PrimerosResultadosActiva => "Primeros ON",
+            GraphicCommand.PrimerosResultadosDesactiva => "Primeros OFF",
+            GraphicCommand.AnimacionSondeoActiva => "Animacion Sondeo ON",
+            GraphicCommand.AnimacionSondeoDesactiva => "Animacion Sondeo OFF",
+            GraphicCommand.DeSondeoAOficiales => "De Sondeo a Oficiales",
+            GraphicCommand.CambioEleccionesEuropa => "Elecciones Europa",
+            GraphicCommand.CambioEleccionesNacional => "Elecciones Nacional",
+            GraphicCommand.PrimeSubirRotulosTD => "Prime Subir TD",
+            GraphicCommand.PrimeBajarRotulosTD => "Prime Bajar TD",
+            GraphicCommand.PrimeSubirRotulosEspeciales => "Prime Subir Especiales",
+            GraphicCommand.PrimeBajarRotulosEspeciales => "Prime Bajar Especiales",
             _ => command.ToString()
         };
     }
@@ -506,10 +1057,68 @@
         });
     }
 
+    private async Task OnElectionSlotChanged(ChangeEventArgs args)
+    {
+        if (!int.TryParse(args.Value?.ToString(), out var parsed))
+        {
+            return;
+        }
+
+        selectedElectionSlot = Math.Clamp(parsed, 1, numEleccionesSimultaneas);
+        await ReloadReferenceDataAsync();
+    }
+
+    private async Task ReloadReferenceDataAsync()
+    {
+        var previousCircCode = selectedCircunscripcionCodigo;
+        var previousMedioCode = selectedMedioCodigo;
+
+        circunscripciones = await DataService.GetCircunscripcionesAsync(selectedElectionSlot, selectedConnectionType);
+        selectedCircunscripcionCodigo = circunscripciones.FirstOrDefault(x => x.Codigo == previousCircCode)?.Codigo
+            ?? circunscripciones.FirstOrDefault()?.Codigo
+            ?? string.Empty;
+
+        var loadedMedios = await DataService.GetMediosAsync(selectedElectionSlot, selectedConnectionType);
+        medios = BuildMediosForUi(loadedMedios);
+        selectedMedioCodigo = medios.FirstOrDefault(x => string.Equals(x.Codigo, previousMedioCode, StringComparison.OrdinalIgnoreCase))?.Codigo
+            ?? medios.FirstOrDefault()?.Codigo
+            ?? "RTVE";
+    }
+
+    private int ResolveIntFromConfig(string key, int fallback, int min, int max)
+    {
+        var raw = Configuration[key];
+        if (!int.TryParse(raw, out var parsed))
+        {
+            return fallback;
+        }
+
+        return Math.Clamp(parsed, min, max);
+    }
+
+    private async Task OnConnectionTypeChanged(ChangeEventArgs args)
+    {
+        if (!int.TryParse(args.Value?.ToString(), out var parsed))
+        {
+            return;
+        }
+
+        selectedConnectionType = parsed is >= 0 and <= 3 ? parsed : 0;
+        await ReloadReferenceDataAsync();
+    }
+
     private static string FormatUtc(DateTime? dt)
     {
         return dt.HasValue ? dt.Value.ToString("yyyy-MM-dd HH:mm:ss") : "-";
     }
+
+    private sealed record ShortcutAction(
+        string Label,
+        GraphicModule Module,
+        string Scene,
+        OperationActionType? Action = null,
+        GraphicCommand Command = GraphicCommand.None,
+        string? CommandValue = null);
 
     public void Dispose()
     {
