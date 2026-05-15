@@ -1,0 +1,52 @@
+@page "/login"
+@attribute [AllowAnonymous]
+@inject NavigationManager Navigation
+
+<PageTitle>Login</PageTitle>
+
+<h1>Acceso operacion</h1>
+
+@if (hasError)
+{
+    <div class="alert alert-danger" role="alert">
+        Credenciales invalidas.
+    </div>
+}
+
+<form method="post" action="/auth/login" class="border rounded p-3" style="max-width: 460px;">
+    <input type="hidden" name="returnUrl" value="@returnUrl" />
+
+    <div class="mb-3">
+        <label class="form-label" for="username">Usuario</label>
+        <input id="username" name="username" class="form-control" required />
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label" for="password">Contrasena</label>
+        <input id="password" name="password" type="password" class="form-control" required />
+    </div>
+
+    <button class="btn btn-primary" type="submit">Entrar</button>
+</form>
+
+@code {
+    private bool hasError;
+    private string returnUrl = "/operacion";
+
+    protected override void OnInitialized()
+    {
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        hasError = query.TryGetValue("error", out var errorValue)
+            && string.Equals(errorValue.ToString(), "1", StringComparison.OrdinalIgnoreCase);
+
+        var requestedReturn = query.TryGetValue("returnUrl", out var returnValue)
+            ? returnValue.ToString()
+            : string.Empty;
+        if (!string.IsNullOrWhiteSpace(requestedReturn)
+            && Uri.IsWellFormedUriString(requestedReturn, UriKind.Relative))
+        {
+            returnUrl = requestedReturn;
+        }
+    }
+}

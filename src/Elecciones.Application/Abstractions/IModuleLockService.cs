@@ -14,5 +14,5 @@ public interface IModuleLockService
 
     bool IsOwner(GraphicModule module, string operatorId);
 
-    void MarkAction(GraphicModule module, string operatorId);
+    void MarkAction(GraphicModule module, string operatorId, OperationActionType action, string scene);
 }

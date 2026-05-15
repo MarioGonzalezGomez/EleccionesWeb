@@ -1,12 +1,15 @@
 @page "/operacion/botonera"
+@attribute [Authorize]
 @implements IDisposable
 @using Elecciones.Application.Abstractions
 @using Elecciones.Application.Models
+@using Elecciones.Infrastructure.Options
 @inject IModuleLockService ModuleLockService
 @inject IOperationService OperationService
 @inject IEleccionesDataService DataService
 @inject IOperatorAuthorizationService AuthorizationService
 @inject IConfiguration Configuration
+@inject AuthenticationStateProvider AuthenticationStateProvider
 
 <PageTitle>Botonera</PageTitle>
 
@@ -44,7 +47,7 @@
     </div>
     <div class="col-12 col-md-3">
         <label class="form-label">Operador</label>
-        <input class="form-control" @bind="operatorId" />
+        <input class="form-control" value="@operatorId" disabled />
     </div>
     <div class="col-12 col-md-3">
         <label class="form-label">Destino TCP</label>
@@ -91,6 +94,9 @@
             <option value="3">Avance 3</option>
             <option value="4">Final</option>
         </select>
+        <div class="small text-muted mt-1">
+            @GetAvanceLabel(selectedAvance)
+        </div>
     </div>
     <div class="col-12 col-md-3 d-flex align-items-end">
         <button class="btn btn-outline-secondary" @onclick="LoadPartiesAsync" disabled="@loadingParties">
@@ -122,16 +128,38 @@
 
     <div class="col-12 col-xl-4">
         <h5>Video</h5>
-        <label class="form-label form-label-sm">Partido</label>
-        <select class="form-select form-select-sm mb-2" @bind="selectedPartyCode">
-            @foreach (var p in availableParties)
-            {
-                <option value="@p.Codigo">@p.Codigo - @p.Siglas</option>
-            }
+        <label class="form-label form-label-sm">Modo seleccion</label>
+        <select class="form-select form-select-sm mb-2" @bind="videoSelectionMode">
+            <option value="party">Por partido</option>
+            <option value="slot">Por fuente de video</option>
         </select>
+
+        @if (videoSelectionMode == "slot")
+        {
+            <label class="form-label form-label-sm">Fuente configurada</label>
+            <select class="form-select form-select-sm mb-2" @bind="selectedVideoSlot">
+                @foreach (var source in videoSources.OrderBy(x => x.Slot))
+                {
+                    var modeLabel = source.IsLive ? "Directo" : "Pregrabado";
+                    var pathLabel = string.IsNullOrWhiteSpace(source.Path) ? "(sin ruta)" : source.Path;
+                    <option value="@source.Slot">@($"Slot {source.Slot} - {modeLabel} - {pathLabel}")</option>
+                }
+            </select>
+        }
+        else
+        {
+            <label class="form-label form-label-sm">Partido</label>
+            <select class="form-select form-select-sm mb-2" @bind="selectedPartyCode">
+                @foreach (var p in availableParties)
+                {
+                    <option value="@p.Codigo">@p.Codigo - @p.Siglas</option>
+                }
+            </select>
+        }
+
         <div class="d-flex flex-wrap gap-2">
-            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoIn)" disabled="@(!CanExecute || string.IsNullOrWhiteSpace(selectedPartyCode))">Video In</button>
-            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOut)" disabled="@(!CanExecute || string.IsNullOrWhiteSpace(selectedPartyCode))">Video Out</button>
+            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoIn)" disabled="@(!CanExecute || !HasVideoSelection())">Video In</button>
+            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOut)" disabled="@(!CanExecute || !HasVideoSelection())">Video Out</button>
             <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoInTodos)" disabled="@(!CanExecute)">Video In Todos</button>
             <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOutTodos)" disabled="@(!CanExecute)">Video Out Todos</button>
         </div>
@@ -156,7 +184,11 @@
     private IReadOnlyList<CircunscripcionSummary> circunscripciones = [];
     private IReadOnlyList<MedioSummary> medios = [new("RTVE", "RTVE")];
     private IReadOnlyList<PartidoSnapshot> availableParties = [];
+    private IReadOnlyList<VideoSourceOptions> videoSources = [];
+    private OperationalHoursOptions operationHours = new();
     private string selectedPartyCode = string.Empty;
+    private int selectedVideoSlot = 1;
+    private string videoSelectionMode = "party";
 
     private GraphicsTarget selectedTarget = GraphicsTarget.Ipf;
     private string selectedCircunscripcionCodigo = string.Empty;
@@ -177,10 +209,20 @@
 
     protected override async Task OnInitializedAsync()
     {
+        operatorId = await ResolveAuthenticatedOperatorIdAsync();
         numEleccionesSimultaneas = ResolveIntFromConfig("Database:NumEleccionesSimultaneas", 1, 1, 3);
         selectedElectionSlot = ResolveIntFromConfig("Database:DefaultElectionSlot", 1, 1, numEleccionesSimultaneas);
+        operationHours = LoadOperationalHoursFromConfig();
+        videoSources = LoadVideoSourcesFromConfig();
+        selectedVideoSlot = videoSources.FirstOrDefault()?.Slot ?? 1;
         await ReloadReferenceDataAsync();
         await LoadPartiesAsync();
+    }
+
+    private async Task<string> ResolveAuthenticatedOperatorIdAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        return authState.User.Identity?.Name?.Trim() ?? string.Empty;
     }
 
     private async Task ReloadReferenceDataAsync()
@@ -234,7 +276,14 @@
 
     private async Task ExecuteVideoCommandAsync(GraphicCommand command)
     {
-        await ExecuteCommandAsync(command, selectedPartyCode);
+        var commandValue = command switch
+        {
+            GraphicCommand.VideoInTodos or GraphicCommand.VideoOutTodos => string.Empty,
+            _ => videoSelectionMode == "slot"
+                ? $"slot:{selectedVideoSlot}"
+                : selectedPartyCode
+        };
+        await ExecuteCommandAsync(command, commandValue);
     }
 
     private async Task ExecuteCommandAsync(GraphicCommand command, string commandValue)
@@ -356,6 +405,69 @@
         }
 
         return Math.Clamp(parsed, min, max);
+    }
+
+    private string ResolveStringFromConfig(string key)
+    {
+        return Configuration[key]?.Trim() ?? string.Empty;
+    }
+
+    private OperationalHoursOptions LoadOperationalHoursFromConfig()
+    {
+        return new OperationalHoursOptions
+        {
+            HoraAvance1 = ResolveStringFromConfig("Operational:Hours:HoraAvance1"),
+            HoraAvance2 = ResolveStringFromConfig("Operational:Hours:HoraAvance2"),
+            HoraAvance3 = ResolveStringFromConfig("Operational:Hours:HoraAvance3"),
+            HoraParticipacion = ResolveStringFromConfig("Operational:Hours:HoraParticipacion"),
+            HoraAvance1Historico = ResolveStringFromConfig("Operational:Hours:HoraAvance1Historico"),
+            HoraAvance2Historico = ResolveStringFromConfig("Operational:Hours:HoraAvance2Historico"),
+            HoraAvance3Historico = ResolveStringFromConfig("Operational:Hours:HoraAvance3Historico"),
+            HoraParticipacionHistorico = ResolveStringFromConfig("Operational:Hours:HoraParticipacionHistorico")
+        };
+    }
+
+    private IReadOnlyList<VideoSourceOptions> LoadVideoSourcesFromConfig()
+    {
+        var result = new List<VideoSourceOptions>();
+        for (var i = 0; i < 6; i++)
+        {
+            var slot = ResolveIntFromConfig($"Operational:VideoSources:{i}:Slot", i + 1, 1, 6);
+            var isLiveRaw = Configuration[$"Operational:VideoSources:{i}:IsLive"];
+            var isLive = bool.TryParse(isLiveRaw, out var parsedLive) && parsedLive;
+            var path = ResolveStringFromConfig($"Operational:VideoSources:{i}:Path");
+
+            result.Add(new VideoSourceOptions
+            {
+                Slot = slot,
+                IsLive = isLive,
+                Path = path
+            });
+        }
+
+        return result.OrderBy(x => x.Slot).ToList();
+    }
+
+    private string GetAvanceLabel(int avance)
+    {
+        return avance switch
+        {
+            1 => $"Avance 1: {operationHours.HoraAvance1} | Historico: {operationHours.HoraAvance1Historico}",
+            2 => $"Avance 2: {operationHours.HoraAvance2} | Historico: {operationHours.HoraAvance2Historico}",
+            3 => $"Avance 3: {operationHours.HoraAvance3} | Historico: {operationHours.HoraAvance3Historico}",
+            4 => $"Final: {operationHours.HoraParticipacion} | Historico: {operationHours.HoraParticipacionHistorico}",
+            _ => $"Automatico (Final {operationHours.HoraParticipacion})"
+        };
+    }
+
+    private bool HasVideoSelection()
+    {
+        if (videoSelectionMode == "slot")
+        {
+            return selectedVideoSlot is >= 1 and <= 6;
+        }
+
+        return !string.IsNullOrWhiteSpace(selectedPartyCode);
     }
 
     public void Dispose()

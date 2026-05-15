@@ -13,6 +13,16 @@ public sealed class AllowAllOperatorAuthorizationService : IOperatorAuthorizatio
         return true;
     }
 
+    public bool CanExecuteAction(string operatorId, GraphicModule module, OperationActionType action)
+    {
+        return true;
+    }
+
+    public bool CanExecuteCommand(string operatorId, GraphicModule module, GraphicCommand command)
+    {
+        return true;
+    }
+
     public string GetRole(string operatorId)
     {
         return "admin";

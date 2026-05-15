@@ -475,29 +475,28 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
     private IEnumerable<string> ResolveVideoIn(OperationRequest request, BrainStormSnapshot snapshot)
     {
-        var partido = TryResolveParty(snapshot, request.CommandValue);
-        if (partido is null)
+        var slotId = TryResolvePartySlotId(snapshot, request.CommandValue);
+        if (string.IsNullOrWhiteSpace(slotId))
         {
             return [];
         }
 
-        var slotId = ResolvePartySlotId(snapshot, partido.Codigo);
+        var mapSuffix = ResolveVideoMapSuffix(snapshot, request.CommandValue, slotId);
         return
         [
-            ItemSetNoValue($"TICKER/FNC_Video{partido.Codigo}", "MAP_EXE"),
+            ItemSetNoValue($"TICKER/FNC_Video{mapSuffix}", "MAP_EXE"),
             EventRun($"VIDEOS/{slotId}/ENTRA")
         ];
     }
 
     private IEnumerable<string> ResolveVideoOut(OperationRequest request, BrainStormSnapshot snapshot)
     {
-        var partido = TryResolveParty(snapshot, request.CommandValue);
-        if (partido is null)
+        var slotId = TryResolvePartySlotId(snapshot, request.CommandValue);
+        if (string.IsNullOrWhiteSpace(slotId))
         {
             return [];
         }
 
-        var slotId = ResolvePartySlotId(snapshot, partido.Codigo);
         return [EventRun($"VIDEOS/{slotId}/SALE")];
     }
 
@@ -956,6 +955,17 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
     private static string? TryResolvePartySlotId(BrainStormSnapshot snapshot, string commandValue)
     {
+        if (!string.IsNullOrWhiteSpace(commandValue)
+            && commandValue.StartsWith("slot:", StringComparison.OrdinalIgnoreCase))
+        {
+            var rawSlot = commandValue["slot:".Length..].Trim();
+            if (int.TryParse(rawSlot, NumberStyles.Integer, CultureInfo.InvariantCulture, out var explicitSlot)
+                && explicitSlot is >= 1 and <= 99)
+            {
+                return explicitSlot.ToString("D2", CultureInfo.InvariantCulture);
+            }
+        }
+
         var partido = TryResolveParty(snapshot, commandValue);
         if (partido is not null)
         {
@@ -1006,6 +1016,17 @@ public sealed class DefaultSignalComposer : ISignalComposer
         }
 
         return "01";
+    }
+
+    private static string ResolveVideoMapSuffix(BrainStormSnapshot snapshot, string commandValue, string slotId)
+    {
+        var party = TryResolveParty(snapshot, commandValue);
+        if (party is not null && !string.IsNullOrWhiteSpace(party.Codigo))
+        {
+            return party.Codigo.Trim();
+        }
+
+        return slotId;
     }
 
     private static string? ResolveSedePartyCode(BrainStormSnapshot snapshot, string commandValue)

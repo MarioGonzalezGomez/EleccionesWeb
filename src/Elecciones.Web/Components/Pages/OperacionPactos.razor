@@ -1,4 +1,5 @@
 @page "/operacion/pactos"
+@attribute [Authorize]
 @implements IDisposable
 @using Elecciones.Application.Abstractions
 @using Elecciones.Application.Models
@@ -7,6 +8,7 @@
 @inject IEleccionesDataService DataService
 @inject IOperatorAuthorizationService AuthorizationService
 @inject IConfiguration Configuration
+@inject AuthenticationStateProvider AuthenticationStateProvider
 
 <PageTitle>Pactos</PageTitle>
 
@@ -44,7 +46,7 @@
     </div>
     <div class="col-12 col-md-3">
         <label class="form-label">Operador</label>
-        <input class="form-control" @bind="operatorId" />
+        <input class="form-control" value="@operatorId" disabled />
     </div>
     <div class="col-12 col-md-3">
         <label class="form-label">Destino TCP</label>
@@ -198,10 +200,17 @@
 
     protected override async Task OnInitializedAsync()
     {
+        operatorId = await ResolveAuthenticatedOperatorIdAsync();
         numEleccionesSimultaneas = ResolveIntFromConfig("Database:NumEleccionesSimultaneas", 1, 1, 3);
         selectedElectionSlot = ResolveIntFromConfig("Database:DefaultElectionSlot", 1, 1, numEleccionesSimultaneas);
         await ReloadReferenceDataAsync();
         await LoadPartiesAsync();
+    }
+
+    private async Task<string> ResolveAuthenticatedOperatorIdAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        return authState.User.Identity?.Name?.Trim() ?? string.Empty;
     }
 
     private async Task ReloadReferenceDataAsync()

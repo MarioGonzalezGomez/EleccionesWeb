@@ -1,11 +1,17 @@
+using System.Security.Cryptography;
+using System.Text;
 using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
 
 namespace EleccionesWeb.Services;
 
-public sealed class ConfiguredOperatorAuthorizationService : IOperatorAuthorizationService
+public sealed class ConfiguredOperatorAuthorizationService :
+    IOperatorAuthorizationService,
+    IOperatorAuthenticationService
 {
     private static readonly IReadOnlyList<GraphicModule> AllModules = Enum.GetValues<GraphicModule>().ToList();
+    private static readonly HashSet<OperationActionType> AllActions = Enum.GetValues<OperationActionType>().ToHashSet();
+    private static readonly HashSet<GraphicCommand> AllCommands = Enum.GetValues<GraphicCommand>().ToHashSet();
 
     private readonly Dictionary<string, OperatorGrant> _grants;
     private readonly bool _allowAllWhenEmpty;
@@ -33,10 +39,82 @@ public sealed class ConfiguredOperatorAuthorizationService : IOperatorAuthorizat
                 .Distinct()
                 .ToList();
 
+            if (modules.Count == 0)
+            {
+                modules = AllModules.ToList();
+            }
+
+            var byModule = new Dictionary<GraphicModule, ModulePermissionGrant>();
+            foreach (var module in modules)
+            {
+                byModule[module] = new ModulePermissionGrant(
+                    AllActions.ToHashSet(),
+                    AllCommands.ToHashSet());
+            }
+
+            foreach (var permission in entry.Permissions)
+            {
+                var parsedModule = TryParseModule(permission.Module);
+                if (!parsedModule.HasValue)
+                {
+                    continue;
+                }
+
+                var module = parsedModule.Value;
+                var actions = permission.Actions
+                    .Select(TryParseAction)
+                    .Where(x => x.HasValue)
+                    .Select(x => x!.Value)
+                    .ToHashSet();
+
+                var commands = permission.Commands
+                    .Select(TryParseCommand)
+                    .Where(x => x.HasValue)
+                    .Select(x => x!.Value)
+                    .ToHashSet();
+
+                byModule[module] = new ModulePermissionGrant(
+                    actions.Count == 0 ? AllActions.ToHashSet() : actions,
+                    commands.Count == 0 ? AllCommands.ToHashSet() : commands);
+            }
+
             _grants[operatorId] = new OperatorGrant(
+                operatorId,
                 string.IsNullOrWhiteSpace(entry.Role) ? "operator" : entry.Role.Trim(),
-                modules);
+                modules,
+                byModule,
+                entry.Password?.Trim() ?? string.Empty,
+                entry.PasswordSha256?.Trim() ?? string.Empty,
+                entry.PasswordEnvVar?.Trim() ?? string.Empty);
         }
+    }
+
+    public bool ValidateCredentials(string operatorId, string password)
+    {
+        if (string.IsNullOrWhiteSpace(operatorId) || string.IsNullOrWhiteSpace(password))
+        {
+            return false;
+        }
+
+        var grant = ResolveGrant(operatorId);
+        if (grant is null)
+        {
+            return _allowAllWhenEmpty && _grants.Count == 0;
+        }
+
+        var configuredPassword = ResolveConfiguredPassword(grant);
+        if (!string.IsNullOrWhiteSpace(grant.PasswordSha256))
+        {
+            var hash = ComputeSha256(password.Trim());
+            return string.Equals(hash, grant.PasswordSha256, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!string.IsNullOrWhiteSpace(configuredPassword))
+        {
+            return string.Equals(configuredPassword, password, StringComparison.Ordinal);
+        }
+
+        return false;
     }
 
     public bool CanOperate(string operatorId, GraphicModule module)
@@ -45,6 +123,30 @@ public sealed class ConfiguredOperatorAuthorizationService : IOperatorAuthorizat
         if (grant is not null)
         {
             return grant.Modules.Contains(module);
+        }
+
+        return _allowAllWhenEmpty && _grants.Count == 0;
+    }
+
+    public bool CanExecuteAction(string operatorId, GraphicModule module, OperationActionType action)
+    {
+        var grant = ResolveGrant(operatorId);
+        if (grant is not null)
+        {
+            return grant.ByModule.TryGetValue(module, out var permission)
+                   && permission.Actions.Contains(action);
+        }
+
+        return _allowAllWhenEmpty && _grants.Count == 0;
+    }
+
+    public bool CanExecuteCommand(string operatorId, GraphicModule module, GraphicCommand command)
+    {
+        var grant = ResolveGrant(operatorId);
+        if (grant is not null)
+        {
+            return grant.ByModule.TryGetValue(module, out var permission)
+                   && permission.Commands.Contains(command);
         }
 
         return _allowAllWhenEmpty && _grants.Count == 0;
@@ -83,6 +185,26 @@ public sealed class ConfiguredOperatorAuthorizationService : IOperatorAuthorizat
         return grant;
     }
 
+    private static string ResolveConfiguredPassword(OperatorGrant grant)
+    {
+        if (!string.IsNullOrWhiteSpace(grant.PasswordEnvVar))
+        {
+            var fromEnv = Environment.GetEnvironmentVariable(grant.PasswordEnvVar);
+            if (!string.IsNullOrWhiteSpace(fromEnv))
+            {
+                return fromEnv.Trim();
+            }
+        }
+
+        return grant.Password;
+    }
+
+    private static string ComputeSha256(string raw)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
+        return Convert.ToHexString(bytes);
+    }
+
     private static GraphicModule? TryParseModule(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -98,14 +220,55 @@ public sealed class ConfiguredOperatorAuthorizationService : IOperatorAuthorizat
         return null;
     }
 
-    private sealed record OperatorGrant(string Role, List<GraphicModule> ModuleList)
+    private static OperationActionType? TryParseAction(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        if (Enum.TryParse<OperationActionType>(raw, true, out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private static GraphicCommand? TryParseCommand(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        if (Enum.TryParse<GraphicCommand>(raw, true, out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private sealed record OperatorGrant(
+        string OperatorId,
+        string Role,
+        List<GraphicModule> ModuleList,
+        Dictionary<GraphicModule, ModulePermissionGrant> ByModule,
+        string Password,
+        string PasswordSha256,
+        string PasswordEnvVar)
     {
         public HashSet<GraphicModule> Modules { get; } = ModuleList.ToHashSet();
     }
 
+    private sealed record ModulePermissionGrant(
+        HashSet<OperationActionType> Actions,
+        HashSet<GraphicCommand> Commands);
+
     private sealed class OperatorAuthorizationConfig
     {
-        public bool AllowAllWhenEmpty { get; set; } = true;
+        public bool AllowAllWhenEmpty { get; set; }
         public List<OperatorEntry> Operators { get; set; } = [];
     }
 
@@ -113,6 +276,17 @@ public sealed class ConfiguredOperatorAuthorizationService : IOperatorAuthorizat
     {
         public string OperatorId { get; set; } = string.Empty;
         public string Role { get; set; } = "operator";
+        public string Password { get; set; } = string.Empty;
+        public string PasswordSha256 { get; set; } = string.Empty;
+        public string PasswordEnvVar { get; set; } = string.Empty;
         public List<string> Modules { get; set; } = [];
+        public List<ModulePermissionEntry> Permissions { get; set; } = [];
+    }
+
+    private sealed class ModulePermissionEntry
+    {
+        public string Module { get; set; } = string.Empty;
+        public List<string> Actions { get; set; } = [];
+        public List<string> Commands { get; set; } = [];
     }
 }

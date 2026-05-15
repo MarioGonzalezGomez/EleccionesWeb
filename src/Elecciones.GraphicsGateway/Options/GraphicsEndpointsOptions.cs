@@ -6,6 +6,8 @@ public sealed class GraphicsEndpointsOptions
 
     public GraphicsEndpointOptions Ipf { get; set; } = new();
     public GraphicsEndpointOptions Prime { get; set; } = new();
+    public GraphicsEndpointOptions Ipf2 { get; set; } = new();
+    public bool SendToIpf2WithIpf { get; set; }
 }
 
 public sealed class GraphicsEndpointOptions

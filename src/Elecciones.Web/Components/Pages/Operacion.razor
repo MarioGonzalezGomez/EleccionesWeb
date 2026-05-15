@@ -1,13 +1,16 @@
 @page "/operacion"
 @page "/operacion/{moduleHint}"
+@attribute [Authorize]
 @implements IDisposable
 @using Elecciones.Application.Abstractions
 @using Elecciones.Application.Models
+@using Elecciones.Infrastructure.Options
 @inject IModuleLockService ModuleLockService
 @inject IOperationService OperationService
 @inject IEleccionesDataService DataService
 @inject IOperatorAuthorizationService AuthorizationService
 @inject IConfiguration Configuration
+@inject AuthenticationStateProvider AuthenticationStateProvider
 
 <PageTitle>Operacion</PageTitle>
 
@@ -45,7 +48,7 @@
     </div>
     <div class="col-12 col-md-3">
         <label class="form-label">Operador</label>
-        <input class="form-control" @bind="operatorId" />
+        <input class="form-control" value="@operatorId" disabled />
     </div>
     <div class="col-12 col-md-3">
         <label class="form-label">Tipo consulta</label>
@@ -125,11 +128,44 @@
             <option value="3">Avance 3</option>
             <option value="4">Final</option>
         </select>
+        <div class="small text-muted mt-1">
+            @GetAvanceLabel(selectedAvance)
+        </div>
     </div>
     <div class="col-12 col-md-3">
         <label class="form-label">Cuenta atras (seg)</label>
         <input class="form-control" type="number" min="0" @bind="sceneSeconds" />
     </div>
+</div>
+
+<div class="border rounded p-3 mb-4">
+    <h5 class="mb-3">Actualizacion en vivo</h5>
+    <div class="row g-3 align-items-end">
+        <div class="col-12 col-md-3">
+            <div class="form-check">
+                <input id="autoRefreshEnabled" class="form-check-input" type="checkbox" @bind="autoRefreshEnabled" />
+                <label class="form-check-label" for="autoRefreshEnabled">Modo autoactualizacion</label>
+            </div>
+        </div>
+        <div class="col-12 col-md-2">
+            <label class="form-label form-label-sm">Intervalo (seg)</label>
+            <input class="form-control form-control-sm" type="number" min="2" max="60" @bind="autoRefreshIntervalSeconds" />
+        </div>
+        <div class="col-12 col-md-3">
+            <button class="btn btn-sm btn-outline-primary" @onclick="RunAutoRefreshCheckNowAsync" disabled="@autoRefreshRunning">
+                @(autoRefreshRunning ? "Comprobando..." : "Comprobar ahora")
+            </button>
+        </div>
+    </div>
+    <div class="small text-muted mt-2">
+        Ultima comprobacion: @FormatUtc(lastAutoRefreshCheckUtc) | Ultima actualizacion automatica: @FormatUtc(lastAutoRefreshAppliedUtc)
+    </div>
+    @if (!string.IsNullOrWhiteSpace(autoRefreshStatusMessage))
+    {
+        <div class="small mt-1 @(autoRefreshStatusIsError ? "text-danger" : "text-success")">
+            @autoRefreshStatusMessage
+        </div>
+    }
 </div>
 
 <div class="row g-4">
@@ -140,8 +176,10 @@
                 <tr>
                     <th>Modulo</th>
                     <th>Estado</th>
+                    <th>En aire</th>
                     <th>Owner</th>
                     <th>Ultima accion (UTC)</th>
+                    <th>Escena</th>
                     <th></th>
                 </tr>
             </thead>
@@ -153,8 +191,10 @@
                     <tr>
                         <td>@state.Module</td>
                         <td>@(state.IsLocked ? "LOCKED" : "FREE")</td>
+                        <td>@(state.IsOnAir ? "SI" : "NO")</td>
                         <td>@(string.IsNullOrWhiteSpace(state.Owner) ? "-" : state.Owner)</td>
                         <td>@FormatUtc(state.LastActionUtc)</td>
+                        <td>@(string.IsNullOrWhiteSpace(state.LastScene) ? "-" : state.LastScene)</td>
                         <td>
                             <button class="btn btn-sm btn-outline-primary me-2"
                                     type="button"
@@ -398,6 +438,17 @@
     private int selectedConnectionType;
     private int sceneSeconds;
     private bool includeZeroSeats;
+    private OperationalHoursOptions operationHours = new();
+    private bool autoRefreshEnabled;
+    private int autoRefreshIntervalSeconds = 5;
+    private bool autoRefreshRunning;
+    private DateTime? lastAutoRefreshCheckUtc;
+    private DateTime? lastAutoRefreshAppliedUtc;
+    private string autoRefreshStatusMessage = string.Empty;
+    private bool autoRefreshStatusIsError;
+    private string? lastAutoRefreshFingerprint;
+    private CancellationTokenSource? autoRefreshCts;
+    private Task? autoRefreshLoopTask;
     private IEnumerable<int> availableElectionSlots => Enumerable.Range(1, Math.Clamp(numEleccionesSimultaneas, 1, 3));
     private bool RequiresAutonomia => queryKind is SnapshotQueryKind.MasVotadosProvincias or SnapshotQueryKind.PartidoProvincias;
     private bool RequiresPartido => queryKind is SnapshotQueryKind.PartidoAutonomias or SnapshotQueryKind.PartidoProvincias;
@@ -491,8 +542,10 @@
 
     protected override async Task OnInitializedAsync()
     {
+        operatorId = await ResolveAuthenticatedOperatorIdAsync();
         numEleccionesSimultaneas = ResolveIntFromConfig("Database:NumEleccionesSimultaneas", 1, 1, 3);
         selectedElectionSlot = ResolveIntFromConfig("Database:DefaultElectionSlot", 1, 1, numEleccionesSimultaneas);
+        operationHours = LoadOperationalHoursFromConfig();
 
         moduleStates = ModuleLockService.GetStates();
         ModuleLockService.LocksChanged += OnLocksChanged;
@@ -505,6 +558,14 @@
             commandValues[module] = string.Empty;
             activeGraphics[module] = GetSupportGraphics(module).FirstOrDefault() ?? "FICHAS";
         }
+
+        StartAutoRefreshLoop();
+    }
+
+    private async Task<string> ResolveAuthenticatedOperatorIdAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        return authState.User.Identity?.Name?.Trim() ?? string.Empty;
     }
 
     private static IReadOnlyList<MedioSummary> BuildMediosForUi(IReadOnlyList<MedioSummary> loadedMedios)
@@ -960,6 +1021,162 @@
         feedbackIsError = !lastResult.Success;
     }
 
+    private void StartAutoRefreshLoop()
+    {
+        autoRefreshCts = new CancellationTokenSource();
+        autoRefreshLoopTask = Task.Run(() => AutoRefreshLoopAsync(autoRefreshCts.Token));
+    }
+
+    private async Task AutoRefreshLoopAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var delaySeconds = Math.Clamp(autoRefreshIntervalSeconds, 2, 60);
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+                await InvokeAsync(() => AutoRefreshTickAsync(cancellationToken));
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch
+            {
+                // Keep loop alive to avoid losing auto-refresh in long running sessions.
+            }
+        }
+    }
+
+    private async Task RunAutoRefreshCheckNowAsync()
+    {
+        await AutoRefreshTickAsync(CancellationToken.None);
+    }
+
+    private async Task AutoRefreshTickAsync(CancellationToken cancellationToken)
+    {
+        if (autoRefreshRunning)
+        {
+            return;
+        }
+
+        autoRefreshRunning = true;
+        autoRefreshStatusIsError = false;
+
+        try
+        {
+            if (!autoRefreshEnabled)
+            {
+                autoRefreshStatusMessage = "Autoactualizacion desactivada.";
+                return;
+            }
+
+            moduleStates = ModuleLockService.GetStates();
+            var modulesOnAir = moduleStates
+                .Where(state => state.IsOnAir)
+                .Where(IsMine)
+                .Where(state => CanOperateModule(state.Module))
+                .Select(state => state.Module)
+                .Distinct()
+                .ToList();
+
+            if (modulesOnAir.Count == 0)
+            {
+                lastAutoRefreshCheckUtc = DateTime.UtcNow;
+                autoRefreshStatusMessage = "Sin modulos propios en aire.";
+                return;
+            }
+
+            var snapshot = await DataService.GetSnapshotAsync(BuildQuery(), oficiales, cancellationToken);
+            var fingerprint = BuildSnapshotFingerprint(snapshot);
+            lastAutoRefreshCheckUtc = DateTime.UtcNow;
+
+            if (string.Equals(fingerprint, lastAutoRefreshFingerprint, StringComparison.Ordinal))
+            {
+                autoRefreshStatusMessage = "Sin cambios de datos.";
+                return;
+            }
+
+            lastAutoRefreshFingerprint = fingerprint;
+            var updatedModules = new List<GraphicModule>();
+
+            foreach (var module in modulesOnAir)
+            {
+                if (!selectedScenes.TryGetValue(module, out var scene) || string.IsNullOrWhiteSpace(scene))
+                {
+                    continue;
+                }
+
+                var request = new OperationRequest
+                {
+                    OperatorId = NormalizedOperatorId,
+                    Module = module,
+                    Scene = scene,
+                    Action = OperationActionType.Update,
+                    SceneSeconds = sceneSeconds > 0 ? sceneSeconds : null,
+                    Command = GraphicCommand.None,
+                    Target = selectedTarget,
+                    Oficiales = oficiales,
+                    ExportName = string.IsNullOrWhiteSpace(exportName) ? "BrainStorm" : exportName.Trim(),
+                    Query = BuildQuery()
+                };
+
+                var result = await OperationService.ExecuteAsync(request, cancellationToken);
+                if (!result.Success)
+                {
+                    autoRefreshStatusIsError = true;
+                    autoRefreshStatusMessage = $"Error autoactualizando {module}: {result.Message}";
+                    return;
+                }
+
+                updatedModules.Add(module);
+                lastResult = result;
+            }
+
+            if (updatedModules.Count > 0)
+            {
+                lastAutoRefreshAppliedUtc = DateTime.UtcNow;
+                autoRefreshStatusMessage = $"Autoactualizados: {string.Join(", ", updatedModules)}";
+                feedbackMessage = autoRefreshStatusMessage;
+                feedbackIsError = false;
+            }
+            else
+            {
+                autoRefreshStatusMessage = "No habia escenas configuradas para autoactualizar.";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            autoRefreshStatusIsError = true;
+            autoRefreshStatusMessage = $"Error en autoactualizacion: {ex.Message}";
+        }
+        finally
+        {
+            autoRefreshRunning = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string BuildSnapshotFingerprint(BrainStormSnapshot snapshot)
+    {
+        var rows = snapshot.Partidos
+            .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
+            .OrderBy(p => p.Codigo, StringComparer.OrdinalIgnoreCase)
+            .Select(p => $"{p.Codigo}:{p.Escanios}:{p.EscaniosHastaSondeo}:{p.Votos}:{p.PorcentajeVoto:0.####}")
+            .ToList();
+
+        return string.Join(
+            "|",
+            snapshot.Circunscripcion.Codigo,
+            snapshot.Avance,
+            snapshot.Escrutado.ToString("0.####"),
+            snapshot.Participacion.ToString("0.####"),
+            string.Join(";", rows));
+    }
+
     private SnapshotQuery BuildQuery()
     {
         return new SnapshotQuery
@@ -1096,6 +1313,38 @@
         return Math.Clamp(parsed, min, max);
     }
 
+    private OperationalHoursOptions LoadOperationalHoursFromConfig()
+    {
+        return new OperationalHoursOptions
+        {
+            HoraAvance1 = ResolveStringFromConfig("Operational:Hours:HoraAvance1"),
+            HoraAvance2 = ResolveStringFromConfig("Operational:Hours:HoraAvance2"),
+            HoraAvance3 = ResolveStringFromConfig("Operational:Hours:HoraAvance3"),
+            HoraParticipacion = ResolveStringFromConfig("Operational:Hours:HoraParticipacion"),
+            HoraAvance1Historico = ResolveStringFromConfig("Operational:Hours:HoraAvance1Historico"),
+            HoraAvance2Historico = ResolveStringFromConfig("Operational:Hours:HoraAvance2Historico"),
+            HoraAvance3Historico = ResolveStringFromConfig("Operational:Hours:HoraAvance3Historico"),
+            HoraParticipacionHistorico = ResolveStringFromConfig("Operational:Hours:HoraParticipacionHistorico")
+        };
+    }
+
+    private string ResolveStringFromConfig(string key)
+    {
+        return Configuration[key]?.Trim() ?? string.Empty;
+    }
+
+    private string GetAvanceLabel(int avance)
+    {
+        return avance switch
+        {
+            1 => $"Avance 1: {operationHours.HoraAvance1} | Historico: {operationHours.HoraAvance1Historico}",
+            2 => $"Avance 2: {operationHours.HoraAvance2} | Historico: {operationHours.HoraAvance2Historico}",
+            3 => $"Avance 3: {operationHours.HoraAvance3} | Historico: {operationHours.HoraAvance3Historico}",
+            4 => $"Final: {operationHours.HoraParticipacion} | Historico: {operationHours.HoraParticipacionHistorico}",
+            _ => $"Automatico (Final {operationHours.HoraParticipacion})"
+        };
+    }
+
     private async Task OnConnectionTypeChanged(ChangeEventArgs args)
     {
         if (!int.TryParse(args.Value?.ToString(), out var parsed))
@@ -1122,6 +1371,13 @@
 
     public void Dispose()
     {
+        if (autoRefreshCts is not null)
+        {
+            autoRefreshCts.Cancel();
+            autoRefreshCts.Dispose();
+            autoRefreshCts = null;
+        }
+
         ModuleLockService.LocksChanged -= OnLocksChanged;
     }
 }

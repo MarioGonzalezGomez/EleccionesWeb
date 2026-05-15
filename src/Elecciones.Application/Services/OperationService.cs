@@ -11,6 +11,7 @@ public sealed class OperationService : IOperationService
     private readonly IGraphicsGateway _graphicsGateway;
     private readonly ISignalComposer _signalComposer;
     private readonly IOperatorAuthorizationService _authorizationService;
+    private readonly IOperationAuditService _auditService;
 
     public OperationService(
         IModuleLockService lockService,
@@ -18,7 +19,8 @@ public sealed class OperationService : IOperationService
         IBrainStormCsvWriter csvWriter,
         IGraphicsGateway graphicsGateway,
         ISignalComposer signalComposer,
-        IOperatorAuthorizationService authorizationService)
+        IOperatorAuthorizationService authorizationService,
+        IOperationAuditService auditService)
     {
         _lockService = lockService;
         _dataService = dataService;
@@ -26,46 +28,84 @@ public sealed class OperationService : IOperationService
         _graphicsGateway = graphicsGateway;
         _signalComposer = signalComposer;
         _authorizationService = authorizationService;
+        _auditService = auditService;
     }
 
     public async Task<OperationResult> ExecuteAsync(OperationRequest request, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(request.OperatorId))
         {
-            return new OperationResult
+            var result = new OperationResult
             {
                 Success = false,
                 Message = "Operator is required."
             };
+
+            await _auditService.RecordAsync(request, result, cancellationToken);
+            return result;
         }
 
         if (!_authorizationService.CanOperate(request.OperatorId, request.Module))
         {
             var role = _authorizationService.GetRole(request.OperatorId);
-            return new OperationResult
+            var result = new OperationResult
             {
                 Success = false,
                 Message = $"Operator '{request.OperatorId}' with role '{role}' cannot operate module '{request.Module}'."
             };
+
+            await _auditService.RecordAsync(request, result, cancellationToken);
+            return result;
+        }
+
+        if (!_authorizationService.CanExecuteAction(request.OperatorId, request.Module, request.Action))
+        {
+            var result = new OperationResult
+            {
+                Success = false,
+                Message = $"Operator '{request.OperatorId}' cannot execute action '{request.Action}' on module '{request.Module}'."
+            };
+
+            await _auditService.RecordAsync(request, result, cancellationToken);
+            return result;
+        }
+
+        if (request.Command != GraphicCommand.None
+            && !_authorizationService.CanExecuteCommand(request.OperatorId, request.Module, request.Command))
+        {
+            var result = new OperationResult
+            {
+                Success = false,
+                Message = $"Operator '{request.OperatorId}' cannot execute command '{request.Command}' on module '{request.Module}'."
+            };
+
+            await _auditService.RecordAsync(request, result, cancellationToken);
+            return result;
         }
 
         var queryError = ValidateQuery(request.Query);
         if (!string.IsNullOrEmpty(queryError))
         {
-            return new OperationResult
+            var result = new OperationResult
             {
                 Success = false,
                 Message = queryError
             };
+
+            await _auditService.RecordAsync(request, result, cancellationToken);
+            return result;
         }
 
         if (!_lockService.IsOwner(request.Module, request.OperatorId))
         {
-            return new OperationResult
+            var result = new OperationResult
             {
                 Success = false,
                 Message = "The selected module is locked by another operator."
             };
+
+            await _auditService.RecordAsync(request, result, cancellationToken);
+            return result;
         }
 
         var snapshot = await _dataService.GetSnapshotAsync(
@@ -80,9 +120,9 @@ public sealed class OperationService : IOperationService
         var signal = _signalComposer.Compose(request, snapshot);
         var dispatchedTargets = await _graphicsGateway.SendAsync(request.Target, signal, cancellationToken);
 
-        _lockService.MarkAction(request.Module, request.OperatorId);
+        _lockService.MarkAction(request.Module, request.OperatorId, request.Action, request.Scene);
 
-        return new OperationResult
+        var successResult = new OperationResult
         {
             Success = true,
             Message = BuildResultMessage(dispatchedTargets),
@@ -90,6 +130,9 @@ public sealed class OperationService : IOperationService
             Signal = signal,
             DispatchedTargets = dispatchedTargets
         };
+
+        await _auditService.RecordAsync(request, successResult, cancellationToken);
+        return successResult;
     }
 
     private async Task WriteSedesCsvIfNeededAsync(

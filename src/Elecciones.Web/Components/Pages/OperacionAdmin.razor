@@ -1,0 +1,280 @@
+@page "/operacion/admin"
+@attribute [Authorize]
+@using Elecciones.GraphicsGateway.Options
+@using Elecciones.Infrastructure.Options
+@using EleccionesWeb.Services
+@inject IOperationalConfigurationService ConfigService
+
+<PageTitle>Configuracion operativa</PageTitle>
+
+<h1>Configuracion operativa</h1>
+
+@if (!string.IsNullOrWhiteSpace(feedbackMessage))
+{
+    <div class="alert @(feedbackIsError ? "alert-danger" : "alert-success")" role="alert">
+        @feedbackMessage
+    </div>
+}
+
+<div class="row g-4">
+    <div class="col-12 col-xl-6">
+        <h4>Activacion de salidas</h4>
+        <div class="form-check mb-3">
+            <input id="sendIpf2WithIpf" class="form-check-input" type="checkbox" @bind="graphics.SendToIpf2WithIpf" />
+            <label for="sendIpf2WithIpf" class="form-check-label">Duplicar envios IPF hacia IPF2</label>
+        </div>
+
+        <div class="border rounded p-3 mb-3">
+            <h5>IPF</h5>
+            <div class="form-check mb-2">
+                <input id="ipfEnabled" class="form-check-input" type="checkbox" @bind="graphics.Ipf.Enabled" />
+                <label class="form-check-label" for="ipfEnabled">Activo</label>
+            </div>
+            <div class="row g-2">
+                <div class="col-12 col-md-6">
+                    <label class="form-label form-label-sm">Host</label>
+                    <input class="form-control form-control-sm" @bind="graphics.Ipf.Host" />
+                </div>
+                <div class="col-12 col-md-3">
+                    <label class="form-label form-label-sm">Puerto</label>
+                    <input class="form-control form-control-sm" type="number" min="1" @bind="graphics.Ipf.Port" />
+                </div>
+                <div class="col-12 col-md-3">
+                    <label class="form-label form-label-sm">BD</label>
+                    <input class="form-control form-control-sm" @bind="graphics.Ipf.Bd" />
+                </div>
+            </div>
+        </div>
+
+        <div class="border rounded p-3 mb-3">
+            <h5>PRIME</h5>
+            <div class="form-check mb-2">
+                <input id="primeEnabled" class="form-check-input" type="checkbox" @bind="graphics.Prime.Enabled" />
+                <label class="form-check-label" for="primeEnabled">Activo</label>
+            </div>
+            <div class="row g-2">
+                <div class="col-12 col-md-6">
+                    <label class="form-label form-label-sm">Host</label>
+                    <input class="form-control form-control-sm" @bind="graphics.Prime.Host" />
+                </div>
+                <div class="col-12 col-md-3">
+                    <label class="form-label form-label-sm">Puerto</label>
+                    <input class="form-control form-control-sm" type="number" min="1" @bind="graphics.Prime.Port" />
+                </div>
+                <div class="col-12 col-md-3">
+                    <label class="form-label form-label-sm">BD</label>
+                    <input class="form-control form-control-sm" @bind="graphics.Prime.Bd" />
+                </div>
+            </div>
+        </div>
+
+        <div class="border rounded p-3">
+            <h5>IPF2 (secundario)</h5>
+            <div class="form-check mb-2">
+                <input id="ipf2Enabled" class="form-check-input" type="checkbox" @bind="graphics.Ipf2.Enabled" />
+                <label class="form-check-label" for="ipf2Enabled">Activo</label>
+            </div>
+            <div class="row g-2">
+                <div class="col-12 col-md-6">
+                    <label class="form-label form-label-sm">Host</label>
+                    <input class="form-control form-control-sm" @bind="graphics.Ipf2.Host" />
+                </div>
+                <div class="col-12 col-md-3">
+                    <label class="form-label form-label-sm">Puerto</label>
+                    <input class="form-control form-control-sm" type="number" min="1" @bind="graphics.Ipf2.Port" />
+                </div>
+                <div class="col-12 col-md-3">
+                    <label class="form-label form-label-sm">BD</label>
+                    <input class="form-control form-control-sm" @bind="graphics.Ipf2.Bd" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+        <h4>Horas operativas</h4>
+        <div class="row g-2 mb-3">
+            <div class="col-6">
+                <label class="form-label form-label-sm">Avance 1</label>
+                <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance1" />
+            </div>
+            <div class="col-6">
+                <label class="form-label form-label-sm">Avance 1 historico</label>
+                <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance1Historico" />
+            </div>
+            <div class="col-6">
+                <label class="form-label form-label-sm">Avance 2</label>
+                <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance2" />
+            </div>
+            <div class="col-6">
+                <label class="form-label form-label-sm">Avance 2 historico</label>
+                <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance2Historico" />
+            </div>
+            <div class="col-6">
+                <label class="form-label form-label-sm">Avance 3</label>
+                <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance3" />
+            </div>
+            <div class="col-6">
+                <label class="form-label form-label-sm">Avance 3 historico</label>
+                <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance3Historico" />
+            </div>
+            <div class="col-6">
+                <label class="form-label form-label-sm">Participacion</label>
+                <input class="form-control form-control-sm" @bind="operational.Hours.HoraParticipacion" />
+            </div>
+            <div class="col-6">
+                <label class="form-label form-label-sm">Participacion historica</label>
+                <input class="form-control form-control-sm" @bind="operational.Hours.HoraParticipacionHistorico" />
+            </div>
+        </div>
+
+        <h4>Fuentes de video</h4>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle">
+                <thead>
+                    <tr>
+                        <th>Slot</th>
+                        <th>Modo</th>
+                        <th>Ruta/URL</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var source in operational.VideoSources.OrderBy(x => x.Slot))
+                    {
+                        <tr>
+                            <td>@source.Slot</td>
+                            <td>
+                                <div class="form-check">
+                                    <input id="@($"videoLive{source.Slot}")" class="form-check-input" type="checkbox" @bind="source.IsLive" />
+                                    <label class="form-check-label" for="@($"videoLive{source.Slot}")">
+                                        @(source.IsLive ? "Directo" : "Pregrabado")
+                                    </label>
+                                </div>
+                            </td>
+                            <td>
+                                <input class="form-control form-control-sm" @bind="source.Path" placeholder="Ruta local o URL" />
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex flex-wrap gap-2 mt-3">
+    <button class="btn btn-primary" @onclick="SaveAsync" disabled="@saving">
+        @(saving ? "Guardando..." : "Guardar configuracion")
+    </button>
+    <button class="btn btn-outline-secondary" @onclick="CheckConnectivityAsync" disabled="@checkingConnectivity">
+        @(checkingConnectivity ? "Comprobando..." : "Comprobar conexiones")
+    </button>
+</div>
+
+@if (connectivityStatuses.Count > 0)
+{
+    <div class="mt-3">
+        <h5>Estado de conexion</h5>
+        <table class="table table-sm table-bordered align-middle">
+            <thead>
+                <tr>
+                    <th>Destino</th>
+                    <th>Activo</th>
+                    <th>Host:Puerto</th>
+                    <th>Estado</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var status in connectivityStatuses)
+                {
+                    <tr>
+                        <td>@status.Name</td>
+                        <td>@(status.Enabled ? "Si" : "No")</td>
+                        <td>@($"{status.Host}:{status.Port}")</td>
+                        <td>
+                            <span class="badge @GetBadgeCss(status)">
+                                @status.Message
+                            </span>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private GraphicsEndpointsOptions graphics = new();
+    private OperationalOptions operational = new();
+    private string feedbackMessage = string.Empty;
+    private bool feedbackIsError;
+    private bool saving;
+    private bool checkingConnectivity;
+    private IReadOnlyList<EndpointConnectivityStatus> connectivityStatuses = [];
+
+    protected override void OnInitialized()
+    {
+        LoadSnapshot();
+    }
+
+    private void LoadSnapshot()
+    {
+        var snapshot = ConfigService.GetSnapshot();
+        graphics = snapshot.GraphicsEndpoints;
+        operational = snapshot.Operational;
+    }
+
+    private async Task SaveAsync()
+    {
+        saving = true;
+        feedbackMessage = string.Empty;
+        feedbackIsError = false;
+        try
+        {
+            var result = await ConfigService.SaveAsync(new OperationalConfigurationSnapshot
+            {
+                GraphicsEndpoints = graphics,
+                Operational = operational
+            });
+
+            feedbackMessage = result.Message;
+            feedbackIsError = !result.Success;
+            LoadSnapshot();
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task CheckConnectivityAsync()
+    {
+        checkingConnectivity = true;
+        feedbackMessage = string.Empty;
+        feedbackIsError = false;
+        try
+        {
+            connectivityStatuses = await ConfigService.CheckConnectivityAsync();
+            feedbackMessage = "Comprobacion completada.";
+        }
+        catch (Exception ex)
+        {
+            feedbackMessage = $"Error comprobando conexiones: {ex.Message}";
+            feedbackIsError = true;
+        }
+        finally
+        {
+            checkingConnectivity = false;
+        }
+    }
+
+    private static string GetBadgeCss(EndpointConnectivityStatus status)
+    {
+        if (!status.Enabled)
+        {
+            return "bg-secondary";
+        }
+
+        return status.Reachable ? "bg-success" : "bg-danger";
+    }
+}

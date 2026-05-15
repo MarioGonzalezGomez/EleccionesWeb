@@ -10,12 +10,12 @@ namespace Elecciones.GraphicsGateway.Services;
 
 public sealed class TcpGraphicsGateway : IGraphicsGateway
 {
-    private readonly GraphicsEndpointsOptions _options;
+    private readonly IOptionsMonitor<GraphicsEndpointsOptions> _optionsMonitor;
     private readonly ILogger<TcpGraphicsGateway> _logger;
 
-    public TcpGraphicsGateway(IOptions<GraphicsEndpointsOptions> options, ILogger<TcpGraphicsGateway> logger)
+    public TcpGraphicsGateway(IOptionsMonitor<GraphicsEndpointsOptions> optionsMonitor, ILogger<TcpGraphicsGateway> logger)
     {
-        _options = options.Value;
+        _optionsMonitor = optionsMonitor;
         _logger = logger;
     }
 
@@ -70,17 +70,34 @@ public sealed class TcpGraphicsGateway : IGraphicsGateway
 
     private IEnumerable<Endpoint> ResolveTargets(GraphicsTarget target)
     {
+        var options = _optionsMonitor.CurrentValue;
+
         return target switch
         {
-            GraphicsTarget.Ipf => [new Endpoint("IPF", _options.Ipf.Enabled, _options.Ipf.Host, _options.Ipf.Port, _options.Ipf.Bd)],
-            GraphicsTarget.Prime => [new Endpoint("PRIME", _options.Prime.Enabled, _options.Prime.Host, _options.Prime.Port, _options.Prime.Bd)],
+            GraphicsTarget.Ipf => BuildIpfTargets(options),
+            GraphicsTarget.Prime => [new Endpoint("PRIME", options.Prime.Enabled, options.Prime.Host, options.Prime.Port, options.Prime.Bd)],
             GraphicsTarget.Both =>
             [
-                new Endpoint("IPF", _options.Ipf.Enabled, _options.Ipf.Host, _options.Ipf.Port, _options.Ipf.Bd),
-                new Endpoint("PRIME", _options.Prime.Enabled, _options.Prime.Host, _options.Prime.Port, _options.Prime.Bd)
+                .. BuildIpfTargets(options),
+                new Endpoint("PRIME", options.Prime.Enabled, options.Prime.Host, options.Prime.Port, options.Prime.Bd)
             ],
             _ => []
         };
+    }
+
+    private static IEnumerable<Endpoint> BuildIpfTargets(GraphicsEndpointsOptions options)
+    {
+        var targets = new List<Endpoint>
+        {
+            new("IPF", options.Ipf.Enabled, options.Ipf.Host, options.Ipf.Port, options.Ipf.Bd)
+        };
+
+        if (options.SendToIpf2WithIpf)
+        {
+            targets.Add(new Endpoint("IPF2", options.Ipf2.Enabled, options.Ipf2.Host, options.Ipf2.Port, options.Ipf2.Bd));
+        }
+
+        return targets;
     }
 
     private sealed record Endpoint(string Name, bool Enabled, string Host, int Port, string Bd);
