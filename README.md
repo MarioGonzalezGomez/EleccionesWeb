@@ -43,6 +43,8 @@ Archivo principal: `src/Elecciones.Web/appsettings.json`
 ### Storage
 
 - `Storage:CsvFolder`: carpeta donde se genera el CSV de salida.
+- `Storage:BrainStormCsvFormat`: `NEW` (por codigo, todos los partidos) o `OLD` (orden legacy por escanios/votos y filtrado sin escanio).
+  En `OLD` tambien se generan `Brainstorm_Codigo.csv` y, en modo sondeo (`oficiales=false`), `Brainstorm_Sondeo_Codigo.csv`.
 
 ### Database
 

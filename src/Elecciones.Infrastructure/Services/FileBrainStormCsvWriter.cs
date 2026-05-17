@@ -13,6 +13,10 @@ namespace Elecciones.Infrastructure.Services;
 
 public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
 {
+    private const string CsvFormatOld = "OLD";
+    private const string BrainStormCodigoFileName = "Brainstorm_Codigo.csv";
+    private const string BrainStormSondeoCodigoFileName = "Brainstorm_Sondeo_Codigo.csv";
+
     private readonly StorageOptions _options;
     private readonly ILogger<FileBrainStormCsvWriter> _logger;
     private static readonly JsonSerializerOptions RecuentosJsonOptions = new()
@@ -38,11 +42,32 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
 
         var safeName = string.IsNullOrWhiteSpace(exportName) ? "BrainStorm" : exportName.Trim();
         var filePath = Path.Combine(folderPath, $"{safeName}.csv");
+        var isOldFormat = IsOldFormat(_options.BrainStormCsvFormat);
+        var rows = isOldFormat
+            ? BuildLegacyRows(snapshot)
+            : BuildCodeAlignedRows(snapshot);
+        var csv = BuildCsv(snapshot, rows, includeEscaniosColumn: !isOldFormat);
 
-        var csv = BuildCsv(snapshot);
         await File.WriteAllTextAsync(filePath, csv, Encoding.UTF8, cancellationToken);
 
         _logger.LogInformation("BrainStorm CSV generated at {Path}", filePath);
+
+        if (!isOldFormat)
+        {
+            return filePath;
+        }
+
+        var csvCodigoPath = Path.Combine(folderPath, BrainStormCodigoFileName);
+        var csvCodigo = BuildCsv(snapshot, BuildCodeAlignedRows(snapshot), includeEscaniosColumn: true);
+        await File.WriteAllTextAsync(csvCodigoPath, csvCodigo, Encoding.UTF8, cancellationToken);
+        _logger.LogInformation("BrainStorm codigo CSV generated at {Path}", csvCodigoPath);
+
+        if (!snapshot.Oficiales)
+        {
+            var csvSondeoPath = Path.Combine(folderPath, BrainStormSondeoCodigoFileName);
+            await File.WriteAllTextAsync(csvSondeoPath, csv, Encoding.UTF8, cancellationToken);
+            _logger.LogInformation("BrainStorm sondeo codigo CSV generated at {Path}", csvSondeoPath);
+        }
 
         return filePath;
     }
@@ -143,7 +168,117 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
         return Path.Combine(AppContext.BaseDirectory, configuredPath);
     }
 
-    private static string BuildCsv(BrainStormSnapshot snapshot)
+    private static string BuildCsv(
+        BrainStormSnapshot snapshot,
+        IReadOnlyList<PartidoSnapshot?> filasCsv,
+        bool includeEscaniosColumn)
+    {
+        var partidosActuales = snapshot.Partidos
+            .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
+            .OrderBy(p => p.Codigo, StringComparer.Ordinal)
+            .ToList();
+
+        var ultimo = partidosActuales.FirstOrDefault(p => p.EsUltimoEscano != 0);
+        var siguiente = partidosActuales.FirstOrDefault(p => p.LuchaUltimoEscano != 0);
+        var resto = siguiente?.RestoVotos ?? 0;
+
+        var numeroPartidos = snapshot.NumPartidos > 0
+            ? snapshot.NumPartidos
+            : partidosActuales.Count(p => snapshot.Oficiales ? p.Escanios > 0 : p.EscaniosHastaSondeo > 0);
+
+        var sb = new StringBuilder();
+
+        sb.AppendLine("Codigo;Nombre;Escrutado;Escanios;Mayoria;Avance;Participacion;Participacion Historica;Media de Participacion;Votantes;Ultimas Elecciones;Numero de partidos;Ultimo;Siguiente;Resto;NombreSondeo;Vot.Faltan");
+        sb.Append(snapshot.Circunscripcion.Codigo).Append(';')
+            .Append(snapshot.Circunscripcion.Nombre).Append(';')
+            .Append(snapshot.Escrutado.ToString("F2", CultureInfo.InvariantCulture)).Append(';')
+            .Append(snapshot.EscaniosTotales).Append(';')
+            .Append(snapshot.MayoriaAbsoluta).Append(';')
+            .Append(snapshot.Avance).Append(';')
+            .Append(snapshot.Participacion.ToString("F2", CultureInfo.InvariantCulture)).Append(';')
+            .Append(snapshot.ParticipacionHistorica.ToString("F2", CultureInfo.InvariantCulture)).Append(';')
+            .Append(snapshot.ParticipacionMedia.ToString("F2", CultureInfo.InvariantCulture)).Append(';')
+            .Append(snapshot.VotantesTotales).Append(';')
+            .Append(snapshot.AnioUltimasElecciones).Append(';')
+            .Append(numeroPartidos).Append(';')
+            .Append(ultimo?.Siglas ?? string.Empty).Append(';')
+            .Append(siguiente?.Siglas ?? string.Empty).Append(';')
+            .Append(resto).Append(';')
+            .Append(snapshot.NombreSondeo ?? string.Empty).Append(';')
+            .Append(snapshot.VotantesFaltan)
+            .AppendLine();
+
+        var cabeceraPartidos = includeEscaniosColumn
+            ? "Codigo;Padre;Siglas;Candidato;Escanios;Escanios Desde Sondeo;Hasta Sondeo;Historicos;% Voto;Votantes;Diferencia de escanios;Tendencia;Diferencia de votos;Tendencia;Votantes Historico;Nombre"
+            : "Codigo;Padre;Siglas;Candidato;Escanios Desde Sondeo;Hasta Sondeo;Historicos;% Voto;Votantes;Diferencia de escanios;Tendencia;Diferencia de votos;Tendencia;Votantes Historico;Nombre";
+        sb.AppendLine(cabeceraPartidos);
+
+        foreach (var partido in filasCsv)
+        {
+            if (partido is null)
+            {
+                var columnas = includeEscaniosColumn ? 16 : 15;
+                sb.AppendLine(string.Join(';', Enumerable.Repeat(string.Empty, columnas)));
+                continue;
+            }
+
+            var escaniosReferencia = snapshot.Oficiales ? partido.Escanios : partido.EscaniosHastaSondeo;
+            var difEscRaw = partido.EscaniosHistoricos == 0
+                ? escaniosReferencia
+                : escaniosReferencia - partido.EscaniosHistoricos;
+            var tendenciaEsc = partido.EscaniosHistoricos == 0
+                ? "*"
+                : difEscRaw > 0 ? "+" : difEscRaw == 0 ? "=" : "-";
+            var difEsc = Math.Abs(difEscRaw);
+
+            var difVotosRaw = partido.Votos - partido.VotantesHistoricos;
+            var tendenciaVotos = partido.VotantesHistoricos == 0
+                ? "*"
+                : difVotosRaw > 0 ? "+" : difVotosRaw == 0 ? "=" : "-";
+            var difVotos = Math.Abs(difVotosRaw);
+
+            var porcentajeTruncado = Math.Truncate(partido.PorcentajeVoto * 10d) / 10d;
+            var escaniosDesdeCsv = snapshot.Oficiales ? partido.Escanios : partido.EscaniosDesdeSondeo;
+            var escaniosHastaCsv = snapshot.Oficiales ? partido.Escanios : partido.EscaniosHastaSondeo;
+
+            sb.Append(partido.Codigo).Append(';')
+                .Append(partido.Padre).Append(';')
+                .Append(partido.Siglas).Append(';')
+                .Append(partido.Candidato).Append(';');
+
+            if (includeEscaniosColumn)
+            {
+                sb.Append(partido.Escanios).Append(';')
+                    .Append(partido.EscaniosDesdeSondeo).Append(';')
+                    .Append(partido.EscaniosHastaSondeo).Append(';');
+            }
+            else
+            {
+                sb.Append(escaniosDesdeCsv).Append(';')
+                    .Append(escaniosHastaCsv).Append(';');
+            }
+
+            sb.Append(partido.EscaniosHistoricos).Append(';')
+                .Append(porcentajeTruncado.ToString(CultureInfo.InvariantCulture)).Append(';')
+                .Append(partido.Votos).Append(';')
+                .Append(difEsc).Append(';')
+                .Append(tendenciaEsc).Append(';')
+                .Append(difVotos).Append(';')
+                .Append(tendenciaVotos).Append(';')
+                .Append(partido.VotantesHistoricos).Append(';')
+                .Append(partido.Nombre)
+                .AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool IsOldFormat(string? configuredFormat)
+    {
+        return string.Equals(configuredFormat?.Trim(), CsvFormatOld, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<PartidoSnapshot?> BuildCodeAlignedRows(BrainStormSnapshot snapshot)
     {
         var partidosActuales = snapshot.Partidos
             .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
@@ -179,83 +314,87 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
             }
         }
 
-        var ultimo = partidosActuales.FirstOrDefault(p => p.EsUltimoEscano != 0);
-        var siguiente = partidosActuales.FirstOrDefault(p => p.LuchaUltimoEscano != 0);
-        var resto = siguiente?.RestoVotos ?? 0;
+        return filasCsv;
+    }
 
-        var numeroPartidos = snapshot.NumPartidos > 0
-            ? snapshot.NumPartidos
-            : partidosActuales.Count(p => snapshot.Oficiales ? p.Escanios > 0 : p.EscaniosHastaSondeo > 0);
+    private static List<PartidoSnapshot?> BuildLegacyRows(BrainStormSnapshot snapshot)
+    {
+        var partidos = snapshot.Partidos
+            .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
+            .Where(p => snapshot.Oficiales ? p.Escanios > 0 : p.EscaniosHastaSondeo > 0)
+            .ToList();
 
-        var sb = new StringBuilder();
+        partidos.Sort((x, y) => CompareLegacyAscending(x, y, snapshot.Oficiales));
+        partidos.Reverse();
 
-        sb.AppendLine("Codigo;Nombre;Escrutado;Escanios;Mayoria;Avance;Participacion;Participacion Historica;Media de Participacion;Votantes;Ultimas Elecciones;Numero de partidos;Ultimo;Siguiente;Resto;NombreSondeo;Vot.Faltan");
-        sb.Append(snapshot.Circunscripcion.Codigo).Append(';')
-            .Append(snapshot.Circunscripcion.Nombre).Append(';')
-            .Append(snapshot.Escrutado.ToString("F2", CultureInfo.InvariantCulture)).Append(';')
-            .Append(snapshot.EscaniosTotales).Append(';')
-            .Append(snapshot.MayoriaAbsoluta).Append(';')
-            .Append(snapshot.Avance).Append(';')
-            .Append(snapshot.Participacion.ToString("F2", CultureInfo.InvariantCulture)).Append(';')
-            .Append(snapshot.ParticipacionHistorica.ToString("F2", CultureInfo.InvariantCulture)).Append(';')
-            .Append(snapshot.ParticipacionMedia.ToString("F2", CultureInfo.InvariantCulture)).Append(';')
-            .Append(snapshot.VotantesTotales).Append(';')
-            .Append(snapshot.AnioUltimasElecciones).Append(';')
-            .Append(numeroPartidos).Append(';')
-            .Append(ultimo?.Siglas ?? string.Empty).Append(';')
-            .Append(siguiente?.Siglas ?? string.Empty).Append(';')
-            .Append(resto).Append(';')
-            .Append(snapshot.NombreSondeo ?? string.Empty).Append(';')
-            .Append(snapshot.VotantesFaltan)
-            .AppendLine();
+        return partidos.Cast<PartidoSnapshot?>().ToList();
+    }
 
-        sb.AppendLine("Codigo;Padre;Siglas;Candidato;Escanios;Escanios Desde Sondeo;Hasta Sondeo;Historicos;% Voto;Votantes;Diferencia de escanios;Tendencia;Diferencia de votos;Tendencia;Votantes Historico;Nombre");
-
-        foreach (var partido in filasCsv)
+    private static int CompareLegacyAscending(PartidoSnapshot x, PartidoSnapshot y, bool oficiales)
+    {
+        var xEsOtros = string.Equals(x.Codigo, "99999", StringComparison.Ordinal);
+        var yEsOtros = string.Equals(y.Codigo, "99999", StringComparison.Ordinal);
+        if (xEsOtros && yEsOtros)
         {
-            if (partido is null)
-            {
-                sb.AppendLine(";;;;;;;;;;;;;;;");
-                continue;
-            }
-
-            var escaniosReferencia = snapshot.Oficiales ? partido.Escanios : partido.EscaniosHastaSondeo;
-            var difEscRaw = partido.EscaniosHistoricos == 0
-                ? escaniosReferencia
-                : escaniosReferencia - partido.EscaniosHistoricos;
-            var tendenciaEsc = partido.EscaniosHistoricos == 0
-                ? "*"
-                : difEscRaw > 0 ? "+" : difEscRaw == 0 ? "=" : "-";
-            var difEsc = Math.Abs(difEscRaw);
-
-            var difVotosRaw = partido.Votos - partido.VotantesHistoricos;
-            var tendenciaVotos = partido.VotantesHistoricos == 0
-                ? "*"
-                : difVotosRaw > 0 ? "+" : difVotosRaw == 0 ? "=" : "-";
-            var difVotos = Math.Abs(difVotosRaw);
-
-            var porcentajeTruncado = Math.Truncate(partido.PorcentajeVoto * 10d) / 10d;
-
-            sb.Append(partido.Codigo).Append(';')
-                .Append(partido.Padre).Append(';')
-                .Append(partido.Siglas).Append(';')
-                .Append(partido.Candidato).Append(';')
-                .Append(partido.Escanios).Append(';')
-                .Append(partido.EscaniosDesdeSondeo).Append(';')
-                .Append(partido.EscaniosHastaSondeo).Append(';')
-                .Append(partido.EscaniosHistoricos).Append(';')
-                .Append(porcentajeTruncado.ToString(CultureInfo.InvariantCulture)).Append(';')
-                .Append(partido.Votos).Append(';')
-                .Append(difEsc).Append(';')
-                .Append(tendenciaEsc).Append(';')
-                .Append(difVotos).Append(';')
-                .Append(tendenciaVotos).Append(';')
-                .Append(partido.VotantesHistoricos).Append(';')
-                .Append(partido.Nombre)
-                .AppendLine();
+            return 0;
         }
 
-        return sb.ToString();
+        var xEscanios = oficiales ? x.Escanios : x.EscaniosHastaSondeo;
+        var yEscanios = oficiales ? y.Escanios : y.EscaniosHastaSondeo;
+        var xTieneRepresentacion = xEscanios > 0;
+        var yTieneRepresentacion = yEscanios > 0;
+
+        if (xEsOtros)
+        {
+            if (xTieneRepresentacion)
+            {
+                return yTieneRepresentacion ? -1 : 1;
+            }
+
+            return -1;
+        }
+
+        if (yEsOtros)
+        {
+            if (yTieneRepresentacion)
+            {
+                return xTieneRepresentacion ? 1 : -1;
+            }
+
+            return 1;
+        }
+
+        int comp;
+        if (oficiales)
+        {
+            comp = x.Escanios.CompareTo(y.Escanios);
+            if (comp == 0)
+            {
+                comp = x.PorcentajeVoto.CompareTo(y.PorcentajeVoto);
+                if (comp == 0)
+                {
+                    comp = x.Votos.CompareTo(y.Votos);
+                }
+            }
+        }
+        else
+        {
+            comp = x.EscaniosHastaSondeo.CompareTo(y.EscaniosHastaSondeo);
+            if (comp == 0)
+            {
+                comp = x.EscaniosDesdeSondeo.CompareTo(y.EscaniosDesdeSondeo);
+                if (comp == 0)
+                {
+                    comp = x.PorcentajeVoto.CompareTo(y.PorcentajeVoto);
+                    if (comp == 0)
+                    {
+                        comp = x.EscaniosHistoricos.CompareTo(y.EscaniosHistoricos);
+                    }
+                }
+            }
+        }
+
+        return comp;
     }
 
     private static PartidoSnapshot? ResolveParty(IReadOnlyList<PartidoSnapshot> partidos, string partyToken)

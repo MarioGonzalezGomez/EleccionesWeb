@@ -54,9 +54,16 @@ public sealed class DefaultSignalComposer : ISignalComposer
             return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
         }
 
+        SyncUltimoEscanoLifecycle(request, snapshot, scene);
+
         if (string.Equals(scene, "CuentaAtras", StringComparison.OrdinalIgnoreCase))
         {
             lines.AddRange(ResolveCuentaAtrasLines(request.Action, request.SceneSeconds));
+            return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
+        if (TryComposeUltimoEscanoOnAirUpdate(request, snapshot, lines))
+        {
             return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
         }
 
@@ -818,7 +825,8 @@ public sealed class DefaultSignalComposer : ISignalComposer
     {
         lock (_stateLock)
         {
-            _ultimoEscanoStates.Remove(request.Module);
+            var state = GetOrCreateUltimoState(request.Module);
+            state.ResetPartidos();
         }
 
         return [EventRun("ULTIMO_ESCANO/SALE_BARRAS")];
@@ -1084,6 +1092,149 @@ public sealed class DefaultSignalComposer : ISignalComposer
             .ToUpperInvariant();
     }
 
+    private void SyncUltimoEscanoLifecycle(OperationRequest request, BrainStormSnapshot snapshot, string scene)
+    {
+        if (request.Command != GraphicCommand.None)
+        {
+            return;
+        }
+
+        if (request.Module is not (GraphicModule.Carton or GraphicModule.Superfaldon))
+        {
+            return;
+        }
+
+        if (!IsUltimoScene(scene))
+        {
+            return;
+        }
+
+        lock (_stateLock)
+        {
+            var state = GetOrCreateUltimoState(request.Module);
+
+            switch (request.Action)
+            {
+                case OperationActionType.Enter:
+                    state.IsUltimoOnAir = true;
+                    state.UltimoSnapshot = BuildUltimoEscanoSnapshot(snapshot);
+                    state.UltimoSnapshotInicializado = true;
+                    state.UltimoCambioDetectado = false;
+                    break;
+                case OperationActionType.Exit:
+                    state.IsUltimoOnAir = false;
+                    state.UltimoSnapshot = string.Empty;
+                    state.UltimoSnapshotInicializado = false;
+                    state.UltimoCambioDetectado = false;
+                    state.ResetPartidos();
+                    break;
+            }
+        }
+    }
+
+    private bool TryComposeUltimoEscanoOnAirUpdate(OperationRequest request, BrainStormSnapshot snapshot, List<string> lines)
+    {
+        if (request.Command != GraphicCommand.None || request.Action != OperationActionType.Update)
+        {
+            return false;
+        }
+
+        if (request.Module is not (GraphicModule.Carton or GraphicModule.Superfaldon))
+        {
+            return false;
+        }
+
+        lock (_stateLock)
+        {
+            if (!_ultimoEscanoStates.TryGetValue(request.Module, out var state) || !state.IsUltimoOnAir)
+            {
+                return false;
+            }
+
+            var snapshotActual = BuildUltimoEscanoSnapshot(snapshot);
+            var hayCambio = state.UltimoSnapshotInicializado
+                && !string.Equals(state.UltimoSnapshot, snapshotActual, StringComparison.Ordinal);
+
+            state.UltimoSnapshot = snapshotActual;
+            state.UltimoSnapshotInicializado = true;
+            state.UltimoCambioDetectado = hayCambio;
+
+            if (request.Module == GraphicModule.Carton)
+            {
+                if (hayCambio)
+                {
+                    lines.Add(EventRun("UltimoEscanoN/Cambio"));
+                }
+                else
+                {
+                    var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
+                    lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                    lines.Add(ItemSetNoValue("UltimoEscanoCSV", "MAP_LLSTRING_LOAD"));
+                }
+
+                return true;
+            }
+
+            if (hayCambio)
+            {
+                lines.Add(EventRun("UltimoEscanoSF/Cambio"));
+            }
+            else
+            {
+                lines.Add(EventRun("ReloadPartidos"));
+            }
+
+            return true;
+        }
+    }
+
+    private static bool IsUltimoScene(string scene)
+    {
+        return string.Equals(scene, "ULTIMO_ESCANO", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene, "ULTIMOESCANO", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildUltimoEscanoSnapshot(BrainStormSnapshot snapshot)
+    {
+        if (snapshot.Partidos.Count == 0)
+        {
+            return "U:|L:";
+        }
+
+        static string PartidoId(PartidoSnapshot partido)
+        {
+            if (!string.IsNullOrWhiteSpace(partido.Codigo))
+            {
+                return $"C:{partido.Codigo.Trim()}";
+            }
+
+            if (!string.IsNullOrWhiteSpace(partido.Siglas))
+            {
+                return $"S:{partido.Siglas.Trim()}";
+            }
+
+            return string.Empty;
+        }
+
+        var ultimo = snapshot.Partidos
+            .Where(p => p.EsUltimoEscano != 0)
+            .Select(PartidoId)
+            .Where(id => !string.IsNullOrEmpty(id))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+
+        var lucha = snapshot.Partidos
+            .Where(p => p.LuchaUltimoEscano != 0)
+            .Select(PartidoId)
+            .Where(id => !string.IsNullOrEmpty(id))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+
+        return $"U:{string.Join(",", ultimo)}|L:{string.Join(",", lucha)}";
+    }
+
     private bool ShouldEmitPrimerosResultados(OperationRequest request, string scene)
     {
         if (request.Action != OperationActionType.Enter)
@@ -1220,6 +1371,20 @@ public sealed class DefaultSignalComposer : ISignalComposer
         public int AnchoAcumuladoDerecha { get; set; }
         public int EscaniosAcumuladosIzquierda { get; set; }
         public int EscaniosAcumuladosDerecha { get; set; }
+        public bool IsUltimoOnAir { get; set; }
+        public string UltimoSnapshot { get; set; } = string.Empty;
+        public bool UltimoSnapshotInicializado { get; set; }
+        public bool UltimoCambioDetectado { get; set; }
+
+        public void ResetPartidos()
+        {
+            PartidosIzquierda.Clear();
+            PartidosDerecha.Clear();
+            AnchoAcumuladoIzquierda = 0;
+            AnchoAcumuladoDerecha = 0;
+            EscaniosAcumuladosIzquierda = 0;
+            EscaniosAcumuladosDerecha = 0;
+        }
     }
 
     private sealed record UltimoEntry(string Codigo, string Siglas, int Escanios, int Ancho);

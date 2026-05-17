@@ -1,6 +1,7 @@
-﻿# Build artifacts
+# Build artifacts
 **/bin/
 **/obj/
+artifacts/manual-run/
 
 # User-specific files
 *.user
