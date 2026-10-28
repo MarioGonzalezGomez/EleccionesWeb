@@ -1,4 +1,4 @@
-﻿using Elecciones.Application.Abstractions;
+using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
 
 namespace Elecciones.Application.Services;
@@ -12,6 +12,7 @@ public sealed class OperationService : IOperationService
     private readonly ISignalComposer _signalComposer;
     private readonly IOperatorAuthorizationService _authorizationService;
     private readonly IOperationAuditService _auditService;
+    private readonly IOperationStateService? _stateService;
 
     public OperationService(
         IModuleLockService lockService,
@@ -20,7 +21,8 @@ public sealed class OperationService : IOperationService
         IGraphicsGateway graphicsGateway,
         ISignalComposer signalComposer,
         IOperatorAuthorizationService authorizationService,
-        IOperationAuditService auditService)
+        IOperationAuditService auditService,
+        IOperationStateService? stateService = null)
     {
         _lockService = lockService;
         _dataService = dataService;
@@ -29,6 +31,7 @@ public sealed class OperationService : IOperationService
         _signalComposer = signalComposer;
         _authorizationService = authorizationService;
         _auditService = auditService;
+        _stateService = stateService;
     }
 
     public async Task<OperationResult> ExecuteAsync(OperationRequest request, CancellationToken cancellationToken = default)
@@ -113,14 +116,15 @@ public sealed class OperationService : IOperationService
             request.Oficiales,
             cancellationToken);
 
-        var csvPath = await _csvWriter.WriteAsync(snapshot, request.ExportName, cancellationToken);
-        await _csvWriter.WriteRecuentosJsonAsync(snapshot, cancellationToken);
+        var csvPath = await _csvWriter.WriteAsync(snapshot, request.ExportName, cancellationToken, request.Module);
+        await _csvWriter.WriteRecuentosJsonAsync(snapshot, cancellationToken, request.Module);
         await WriteSedesCsvIfNeededAsync(request, snapshot, cancellationToken);
 
         var signal = _signalComposer.Compose(request, snapshot);
-        var dispatchedTargets = await _graphicsGateway.SendAsync(request.Target, signal, cancellationToken);
+        var dispatchedTargets = await _graphicsGateway.SendAsync(request.Target, signal, cancellationToken, request.Module);
 
         _lockService.MarkAction(request.Module, request.OperatorId, request.Action, request.Scene);
+        _stateService?.RecordExecution(request, snapshot);
 
         var successResult = new OperationResult
         {
@@ -150,7 +154,7 @@ public sealed class OperationService : IOperationService
             return;
         }
 
-        await _csvWriter.WriteSedesAsync(snapshot, request.CommandValue, cancellationToken);
+        await _csvWriter.WriteSedesAsync(snapshot, request.CommandValue, cancellationToken, request.Module);
     }
 
     private static string BuildResultMessage(IReadOnlyList<string> dispatchedTargets)

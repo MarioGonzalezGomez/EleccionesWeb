@@ -22,16 +22,29 @@ catch (Exception ex)
 
 static string ResolveTargetUrl(string[] args)
 {
-    if (args.Length > 0 && Uri.IsWellFormedUriString(args[0], UriKind.Absolute))
+    var baseUrl = Environment.GetEnvironmentVariable("ELECCIONES_WEB_URL");
+    if (string.IsNullOrWhiteSpace(baseUrl) || !Uri.IsWellFormedUriString(baseUrl, UriKind.Absolute))
     {
-        return args[0];
+        baseUrl = "http://localhost:5177";
+    }
+    baseUrl = baseUrl.TrimEnd('/');
+
+    if (args.Length > 0)
+    {
+        var arg = args[0].Trim();
+        if (Uri.IsWellFormedUriString(arg, UriKind.Absolute))
+        {
+            return arg;
+        }
+
+        return arg.ToLowerInvariant() switch
+        {
+            "faldon" or "faldón" => $"{baseUrl}/faldon",
+            "carton" or "cartón" => $"{baseUrl}/carton",
+            "admin" or "control" => $"{baseUrl}/admin",
+            _ => $"{baseUrl}/admin"
+        };
     }
 
-    var fromEnv = Environment.GetEnvironmentVariable("ELECCIONES_WEB_URL");
-    if (!string.IsNullOrWhiteSpace(fromEnv) && Uri.IsWellFormedUriString(fromEnv, UriKind.Absolute))
-    {
-        return fromEnv;
-    }
-
-    return "http://localhost:5177/operacion";
+    return $"{baseUrl}/admin";
 }

@@ -1,4 +1,4 @@
-﻿namespace Elecciones.Application.Models;
+namespace Elecciones.Application.Models;
 
 public enum GraphicCommand
 {
@@ -18,6 +18,7 @@ public enum GraphicCommand
     VideoOut = 11,
     VideoInTodos = 12,
     VideoOutTodos = 13,
+    VideoPrepara = 14,
 
     SedesEntra = 20,
     SedesEncadena = 21,
@@ -46,5 +47,11 @@ public enum GraphicCommand
     PrimeSubirRotulosTD = 60,
     PrimeBajarRotulosTD = 61,
     PrimeSubirRotulosEspeciales = 62,
-    PrimeBajarRotulosEspeciales = 63
+    PrimeBajarRotulosEspeciales = 63,
+
+    CcaaSube = 70,
+    CcaaBaja = 71,
+    MayoriasSube = 72,
+    MayoriasBaja = 73,
+    CarruselEncadena = 74
 }

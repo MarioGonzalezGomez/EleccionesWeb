@@ -18,10 +18,28 @@ public sealed class DefaultSignalComposer : ISignalComposer
     private static readonly string[] UltimoBarrasIzq = ["Barra_Izq", "Barra_Izq1", "Barra_Izq2", "Barra_Izq3", "Barra_Izq4", "Barra_Izq5"];
     private static readonly string[] UltimoBarrasDch = ["Barra_Dch", "Barra_Dch1", "Barra_Dch2", "Barra_Dch3", "Barra_Dch4", "Barra_Dch5"];
 
+    private static readonly Dictionary<int, (int Size, int[] Positions, int LogoPos, int EscanosPos)> TickerTdLayouts = new()
+    {
+        { 1,  (1344, [0], -124, -10) },
+        { 2,  (662,  [0, 682], -450, -327) },
+        { 3,  (433,  [0, 453, 905], -565, -395) },
+        { 4,  (320,  [0, 341, 683, 1024], -621, -441) },
+        { 5,  (252,  [0, 273, 546, 819, 1092], -655, -470) },
+        { 6,  (207,  [0, 228, 455, 683, 910, 1138], -678, -502) },
+        { 7,  (175,  [0, 195, 390, 585, 780, 975, 1170], -695, -523) },
+        { 8,  (150,  [0, 171, 341, 512, 682, 853, 1024, 1194], -705, -539) },
+        { 9,  (132,  [0, 152, 304, 456, 608, 760, 912, 1064, 1215], -715, -552) },
+        { 10, (117,  [0, 137, 274, 411, 548, 684, 821, 958, 1095, 1232], -721, -562) },
+        { 11, (104,  [0, 124, 249, 373, 498, 622, 747, 871, 995, 1120, 1244], -730, -569) },
+        { 12, (94,   [0, 114, 228, 343, 457, 571, 685, 799, 914, 1028, 1142, 1256], -733, -579) }
+    };
+
     private readonly object _stateLock = new();
     private readonly Dictionary<GraphicModule, PactosState> _pactosStates = new();
     private readonly Dictionary<GraphicModule, SedesState> _sedesStates = new();
     private readonly Dictionary<GraphicModule, UltimoEscanoState> _ultimoEscanoStates = new();
+    private readonly Dictionary<GraphicModule, FaldonState> _faldonStates = new();
+    private readonly Dictionary<GraphicModule, CartonState> _cartonStates = new();
     private bool _animacionPrimerosEnabled = true;
     private bool _animacionSondeoEnabled = true;
 
@@ -54,6 +72,12 @@ public sealed class DefaultSignalComposer : ISignalComposer
             return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
         }
 
+        if (request.Module == GraphicModule.Faldon && IsFaldonTickerScene(scene))
+        {
+            lines.AddRange(ResolveFaldonTickerScene(request, snapshot));
+            return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
         SyncUltimoEscanoLifecycle(request, snapshot, scene);
 
         if (string.Equals(scene, "CuentaAtras", StringComparison.OrdinalIgnoreCase))
@@ -65,6 +89,26 @@ public sealed class DefaultSignalComposer : ISignalComposer
         if (TryComposeUltimoEscanoOnAirUpdate(request, snapshot, lines))
         {
             return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
+        if (request.Module == GraphicModule.Carton && TryComposeCartonScene(request, snapshot, scene, lines))
+        {
+            return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
+        if (request.Module == GraphicModule.Superfaldon
+            && string.Equals(scene, "SUPERFALDON", StringComparison.OrdinalIgnoreCase)
+            && request.Action == OperationActionType.Exit)
+        {
+            lock (_stateLock)
+            {
+                var sedesState = GetOrCreateSedesState(request.Module);
+                if (sedesState.IsSuperfaldonSedeOnAir)
+                {
+                    lines.Add(EventRun("Superfaldon/Sedes/RepliegaSede"));
+                    sedesState.IsSuperfaldonSedeOnAir = false;
+                }
+            }
         }
 
         var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
@@ -93,6 +137,162 @@ public sealed class DefaultSignalComposer : ISignalComposer
         }
 
         return string.Join("\n", lines);
+    }
+
+    private static bool IsFaldonTickerScene(string scene)
+    {
+        return scene.Equals("TICKER", StringComparison.OrdinalIgnoreCase)
+            || scene.Equals("Escrutinio", StringComparison.OrdinalIgnoreCase)
+            || scene.Equals("Sondeo", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private IEnumerable<string> ResolveFaldonTickerScene(OperationRequest request, BrainStormSnapshot snapshot)
+    {
+        var lines = new List<string>();
+        var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
+        var tipo = request.Oficiales ? "Escrutinio" : "Sondeo";
+
+        lock (_stateLock)
+        {
+            var state = GetOrCreateFaldonState(request.Module);
+            var partidoIdMap = BuildPartidoIdMap(snapshot);
+            var partidosActivos = GetOrderedActiveParties(snapshot, request.Oficiales);
+
+            switch (request.Action)
+            {
+                case OperationActionType.Prepare:
+                    lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                    lines.Add(EventRun($"{tipo}/Prepara"));
+                    break;
+
+                case OperationActionType.Enter:
+                    lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                    if (_animacionPrimerosEnabled && (request.Oficiales || _animacionSondeoEnabled))
+                    {
+                        lines.Add(EventRun("PrimerosResultados/Entra"));
+                    }
+
+                    var countEntra = Math.Max(partidosActivos.Count, 1);
+                    var tamanoFichaEntra = (1748.0 - (10 * (countEntra - 1))) / countEntra;
+                    lines.Add(ItemSetNumeric("fichaPartido", "PRIM_RECGLO_LEN[0]", tamanoFichaEntra));
+
+                    double posAcumuladaEntra = 0;
+                    for (int i = 0; i < partidosActivos.Count; i++)
+                    {
+                        var partido = partidosActivos[i];
+                        var partidoId = GetPartyIdFromMap(partidoIdMap, partido.Codigo, i + 1);
+                        lines.Add(ItemSetNumeric($"Graficos/{tipo}/partidos/partido{partidoId}", "OBJ_DISPLACEMENT[0]", posAcumuladaEntra));
+                        if (i < partidosActivos.Count - 1)
+                        {
+                            posAcumuladaEntra += tamanoFichaEntra + 10;
+                        }
+                    }
+
+                    lines.AddRange(BuildRecolocarPartidosNoActivosLines(
+                        partidoIdMap,
+                        partidosActivos,
+                        tipo,
+                        posAcumuladaEntra + tamanoFichaEntra,
+                        tamanoFichaEntra,
+                        useItemGo: false,
+                        animTime: 0,
+                        delay: 0));
+
+                    if (partidosActivos.Count > 6)
+                    {
+                        lines.Add(EventRun("SaleFoto"));
+                    }
+
+                    lines.Add(EventRun($"{tipo}/Entra"));
+                    break;
+
+                case OperationActionType.Update:
+                    lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                    if (state.PartidosExpandidos.Count > 0)
+                    {
+                        lines.Add(EventRun($"{tipo}/Actualiza"));
+                        break;
+                    }
+
+                    var countUpdate = Math.Max(partidosActivos.Count, 1);
+                    var tamanoFichaUpdate = (1748.0 - (10 * (countUpdate - 1))) / countUpdate;
+                    lines.Add(ItemGoNumeric("fichaPartido", "PRIM_RECGLO_LEN[0]", tamanoFichaUpdate, 0.3, 0));
+
+                    double posAcumuladaUpdate = 0;
+                    for (int i = 0; i < partidosActivos.Count; i++)
+                    {
+                        var partido = partidosActivos[i];
+                        var partidoId = GetPartyIdFromMap(partidoIdMap, partido.Codigo, i + 1);
+                        lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{partidoId}", "OBJ_DISPLACEMENT[0]", posAcumuladaUpdate, 0.3, 0));
+                        if (i < partidosActivos.Count - 1)
+                        {
+                            posAcumuladaUpdate += tamanoFichaUpdate + 10;
+                        }
+                    }
+
+                    lines.AddRange(BuildRecolocarPartidosNoActivosLines(
+                        partidoIdMap,
+                        partidosActivos,
+                        tipo,
+                        posAcumuladaUpdate + tamanoFichaUpdate,
+                        tamanoFichaUpdate,
+                        useItemGo: true,
+                        animTime: 0.3,
+                        delay: 0));
+
+                    if (partidosActivos.Count > 6)
+                    {
+                        lines.Add(EventRun("SaleFoto"));
+                    }
+
+                    lines.Add(EventRun($"{tipo}/Actualiza"));
+                    break;
+
+                case OperationActionType.Exit:
+                    if (state.PartidosExpandidos.Count > 0)
+                    {
+                        lines.AddRange(ResolveVideoOutTodosInternal(request, snapshot, state));
+                    }
+                    lines.Add(EventRun($"{tipo}/Sale"));
+                    break;
+            }
+        }
+
+        return lines;
+    }
+
+    private static List<string> BuildRecolocarPartidosNoActivosLines(
+        Dictionary<string, string> partidoIdMap,
+        List<PartidoSnapshot> partidosActivos,
+        string tipo,
+        double posicionBaseNoActivos,
+        double tamanoFicha,
+        bool useItemGo,
+        double animTime,
+        double delay)
+    {
+        var lines = new List<string>();
+        var codigosActivos = new HashSet<string>(
+            partidosActivos.Where(p => !string.IsNullOrWhiteSpace(p.Codigo)).Select(p => p.Codigo),
+            StringComparer.OrdinalIgnoreCase);
+
+        var partidosNoActivos = partidoIdMap
+            .Where(kvp => !codigosActivos.Contains(kvp.Key))
+            .OrderBy(kvp => int.TryParse(kvp.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) ? id : int.MaxValue)
+            .ToList();
+
+        int offset = 0;
+        foreach (var kvp in partidosNoActivos)
+        {
+            var posicion = posicionBaseNoActivos + (offset * (tamanoFicha + 10));
+            var path = $"Graficos/{tipo}/partidos/partido{kvp.Value}";
+            lines.Add(useItemGo
+                ? ItemGoNumeric(path, "OBJ_DISPLACEMENT[0]", posicion, animTime, delay)
+                : ItemSetNumeric(path, "OBJ_DISPLACEMENT[0]", posicion));
+            offset++;
+        }
+
+        return lines;
     }
 
     private static string ResolveScene(OperationRequest request)
@@ -224,8 +424,8 @@ public sealed class DefaultSignalComposer : ISignalComposer
     {
         return action switch
         {
-            OperationActionType.Enter => "ULTIMO/Entra",
-            OperationActionType.Exit => "ULTIMO/Sale",
+            OperationActionType.Enter => "UltimoEscanoN/Entra",
+            OperationActionType.Exit => "UltimoEscanoN/Sale",
             _ => string.Empty
         };
     }
@@ -375,18 +575,21 @@ public sealed class DefaultSignalComposer : ISignalComposer
             ],
             GraphicCommand.TickerFotosEntra => [EventRun("EntraFoto")],
             GraphicCommand.TickerFotosSale => [EventRun("SaleFoto")],
-            GraphicCommand.TickerTDEntra => [EventRun("FALDON_TD/ENTRA")],
-            GraphicCommand.TickerTDActualiza =>
-            [
-                ItemSetString("NumeroEscrutado", "TEXT_STRING", $"{snapshot.Escrutado.ToString("0.##", CultureInfo.InvariantCulture)}%"),
-                EventRun("FALDON_TD/ACTUALIZA")
-            ],
+            GraphicCommand.TickerTDEntra => ResolveTickerTdEntra(request, snapshot),
+            GraphicCommand.TickerTDActualiza => ResolveTickerTdActualiza(request, snapshot),
             GraphicCommand.TickerTDSale => [EventRun("FALDON_TD/SALE")],
 
+            GraphicCommand.VideoPrepara => ResolveVideoPrepara(request, snapshot),
             GraphicCommand.VideoIn => ResolveVideoIn(request, snapshot),
             GraphicCommand.VideoOut => ResolveVideoOut(request, snapshot),
-            GraphicCommand.VideoInTodos => ResolveVideoInTodos(snapshot),
-            GraphicCommand.VideoOutTodos => ResolveVideoOutTodos(snapshot),
+            GraphicCommand.VideoInTodos => ResolveVideoInTodos(request, snapshot),
+            GraphicCommand.VideoOutTodos => ResolveVideoOutTodos(request, snapshot),
+
+            GraphicCommand.CcaaSube => [EventRun("CCAA_CARTONES/SUBE")],
+            GraphicCommand.CcaaBaja => [EventRun("CCAA_CARTONES/BAJA")],
+            GraphicCommand.MayoriasSube => [EventRun("MAYORIAS/SUBE")],
+            GraphicCommand.MayoriasBaja => [EventRun("MAYORIAS/BAJA")],
+            GraphicCommand.CarruselEncadena => ResolveCarruselEncadena(request, snapshot),
 
             GraphicCommand.SedesEntra => request.Module == GraphicModule.Superfaldon
                 ? ResolveSuperfaldonSedesEntra(request, snapshot)
@@ -395,7 +598,7 @@ public sealed class DefaultSignalComposer : ISignalComposer
                 ? ResolveSuperfaldonSedesEncadena(request, snapshot)
                 : ResolveFaldonSedesEncadena(request, snapshot),
             GraphicCommand.SedesSale => request.Module == GraphicModule.Superfaldon
-                ? [EventRun("Superfaldon/Sedes/RepliegaSede")]
+                ? ResolveSuperfaldonSedesSale(request)
                 : ResolveFaldonSedesSale(request),
 
             GraphicCommand.PactosEntra => [EventRun("Pactometro/Entra")],
@@ -480,49 +683,489 @@ public sealed class DefaultSignalComposer : ISignalComposer
         return [];
     }
 
-    private IEnumerable<string> ResolveVideoIn(OperationRequest request, BrainStormSnapshot snapshot)
+    private IEnumerable<string> ResolveVideoPrepara(OperationRequest request, BrainStormSnapshot snapshot)
     {
         var slotId = TryResolvePartySlotId(snapshot, request.CommandValue);
-        if (string.IsNullOrWhiteSpace(slotId))
+        if (string.IsNullOrEmpty(slotId))
         {
             return [];
         }
 
-        var mapSuffix = ResolveVideoMapSuffix(snapshot, request.CommandValue, slotId);
-        return
-        [
-            ItemSetNoValue($"TICKER/FNC_Video{mapSuffix}", "MAP_EXE"),
-            EventRun($"VIDEOS/{slotId}/ENTRA")
-        ];
+        return [EventRun($"VIDEOS/{slotId}/PREPARA")];
+    }
+
+    private IEnumerable<string> ResolveVideoIn(OperationRequest request, BrainStormSnapshot snapshot)
+    {
+        var partidoSeleccionado = TryResolveParty(snapshot, request.CommandValue);
+        if (partidoSeleccionado is null)
+        {
+            return [];
+        }
+
+        lock (_stateLock)
+        {
+            var state = GetOrCreateFaldonState(request.Module);
+            if (!state.PartidosExpandidos.Any(x => string.Equals(x, partidoSeleccionado.Codigo, StringComparison.OrdinalIgnoreCase)))
+            {
+                state.PartidosExpandidos.Add(partidoSeleccionado.Codigo);
+            }
+
+            return BuildVideoInLines(request.Oficiales, snapshot, state, partidoSeleccionado.Codigo);
+        }
+    }
+
+    private static List<string> BuildVideoInLines(
+        bool oficiales,
+        BrainStormSnapshot snapshot,
+        FaldonState state,
+        string? triggeredPartyCode)
+    {
+        var lines = new List<string>();
+        var partidoIdMap = BuildPartidoIdMap(snapshot);
+        var partidosActivos = GetOrderedActiveParties(snapshot, oficiales);
+        var count = partidosActivos.Count;
+        if (count == 0)
+        {
+            return lines;
+        }
+
+        var usarExpansionDinamica = count > 4;
+        var totalWidthAvailable = 1748.0 - (10 * (count - 1));
+        var minWidth = 1748.0 / 5.0; // 349.6
+
+        var numExpandidos = partidosActivos.Count(p =>
+            state.PartidosExpandidos.Any(c => string.Equals(c, p.Codigo, StringComparison.OrdinalIgnoreCase)));
+
+        double widthOthers;
+        if (!usarExpansionDinamica || numExpandidos == 0)
+        {
+            widthOthers = totalWidthAvailable / count;
+        }
+        else
+        {
+            widthOthers = (count - numExpandidos) > 0
+                ? (totalWidthAvailable - (numExpandidos * minWidth)) / (count - numExpandidos)
+                : 0;
+        }
+
+        var tipo = oficiales ? "Escrutinio" : "Sondeo";
+        double posicionAcumulada = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            var partido = partidosActivos[i];
+            var sceneObjectId = GetPartyIdFromMap(partidoIdMap, partido.Codigo, i + 1);
+            var isExpanded = state.PartidosExpandidos.Any(c => string.Equals(c, partido.Codigo, StringComparison.OrdinalIgnoreCase));
+
+            double currentWidth;
+            double scaleX;
+            double scaleZ;
+
+            if (isExpanded)
+            {
+                currentWidth = usarExpansionDinamica ? minWidth : widthOthers;
+                scaleX = (usarExpansionDinamica && widthOthers > 0) ? (minWidth / widthOthers) : 1.0;
+                scaleZ = 1.4;
+            }
+            else
+            {
+                currentWidth = widthOthers;
+                scaleX = 1.0;
+                scaleZ = 1.0;
+            }
+
+            lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}", "OBJ_DISPLACEMENT[0]", posicionAcumulada, 0.5, 0));
+            lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/fichaPartido", "OBJ_SCALE[0]", scaleX, 0.5, 0));
+            lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/fichaPartido", "OBJ_SCALE[2]", scaleZ, 0.5, 0));
+
+            if (isExpanded)
+            {
+                var posVid = count >= 5 ? -656 : count == 4 ? -566 : count == 3 ? -426 : -656;
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/Vid", "OBJ_DISPLACEMENT[0]", posVid, 0.5, 0));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DirectoMascara/Directo", "OBJ_DISPLACEMENT[2]", 40, 0.5, 0));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG/Escanios", "OBJ_HOTPOINT[1]", 45, 0.5, 0));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP/Escanios", "OBJ_HOTPOINT[1]", 33, 0.5, 0));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG/Porcentaje1", "OBJ_HOTPOINT[1]", -11, 0.5, 0));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG/Diferencia", "OBJ_HOTPOINT[1]", -11, 0.5, 0));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP/Porcentaje1", "OBJ_HOTPOINT[1]", -16, 0.5, 0));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP/Diferencia", "OBJ_HOTPOINT[1]", -16, 0.5, 0));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG", "OBJ_DISPLACEMENT[2]", 25, 0.5, 0));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP", "OBJ_DISPLACEMENT[2]", 25, 0.5, 0));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/Logo", "OBJ_DISPLACEMENT[2]", 25, 0.5, 0));
+            }
+
+            if (triggeredPartyCode is null || string.Equals(partido.Codigo, triggeredPartyCode, StringComparison.OrdinalIgnoreCase))
+            {
+                if (isExpanded)
+                {
+                    lines.Add(EventRun($"VIDEOS/{sceneObjectId}/ENTRA"));
+                }
+            }
+
+            if (i < count - 1)
+            {
+                posicionAcumulada += currentWidth + 10;
+            }
+        }
+
+        if (usarExpansionDinamica)
+        {
+            var baseWidth = (numExpandidos == count) ? minWidth : widthOthers;
+            lines.Add(ItemGoNumeric("fichaPartido", "PRIM_RECGLO_LEN[0]", baseWidth, 0.5, 0));
+            var ultimoAncho = state.PartidosExpandidos.Any(c => string.Equals(c, partidosActivos[^1].Codigo, StringComparison.OrdinalIgnoreCase))
+                ? minWidth
+                : widthOthers;
+            lines.AddRange(BuildRecolocarPartidosNoActivosLines(
+                partidoIdMap,
+                partidosActivos,
+                tipo,
+                posicionAcumulada + ultimoAncho,
+                baseWidth,
+                useItemGo: true,
+                animTime: 0.5,
+                delay: 0));
+        }
+
+        lines.Add(EventRun("Titular/Ocultar"));
+        return lines;
     }
 
     private IEnumerable<string> ResolveVideoOut(OperationRequest request, BrainStormSnapshot snapshot)
     {
-        var slotId = TryResolvePartySlotId(snapshot, request.CommandValue);
-        if (string.IsNullOrWhiteSpace(slotId))
+        var partidoSeleccionado = TryResolveParty(snapshot, request.CommandValue);
+        if (partidoSeleccionado is null)
         {
             return [];
         }
 
-        return [EventRun($"VIDEOS/{slotId}/SALE")];
+        lock (_stateLock)
+        {
+            var state = GetOrCreateFaldonState(request.Module);
+            state.PartidosExpandidos.RemoveAll(c => string.Equals(c, partidoSeleccionado.Codigo, StringComparison.OrdinalIgnoreCase));
+
+            var lines = new List<string>();
+            var partidoIdMap = BuildPartidoIdMap(snapshot);
+            var partidosActivos = GetOrderedActiveParties(snapshot, request.Oficiales);
+            var count = partidosActivos.Count;
+            if (count == 0)
+            {
+                return lines;
+            }
+
+            var usarExpansionDinamica = count > 4;
+            var totalWidthAvailable = 1748.0 - (10 * (count - 1));
+            var minWidth = 1748.0 / 5.0;
+
+            var numExpandidos = partidosActivos.Count(p =>
+                state.PartidosExpandidos.Any(c => string.Equals(c, p.Codigo, StringComparison.OrdinalIgnoreCase)));
+
+            if (numExpandidos == 0)
+            {
+                lines.Add(EventRun("Titular/Recuperar"));
+            }
+
+            double widthOthers;
+            if (!usarExpansionDinamica || numExpandidos == 0)
+            {
+                widthOthers = totalWidthAvailable / count;
+            }
+            else
+            {
+                widthOthers = (count - numExpandidos) > 0
+                    ? (totalWidthAvailable - (numExpandidos * minWidth)) / (count - numExpandidos)
+                    : 0;
+            }
+
+            var tipo = request.Oficiales ? "Escrutinio" : "Sondeo";
+            double posicionAcumulada = 0;
+
+            for (int i = 0; i < count; i++)
+            {
+                var partido = partidosActivos[i];
+                var sceneObjectId = GetPartyIdFromMap(partidoIdMap, partido.Codigo, i + 1);
+                var isExpanded = state.PartidosExpandidos.Any(c => string.Equals(c, partido.Codigo, StringComparison.OrdinalIgnoreCase));
+
+                double currentWidth;
+                double scaleX;
+                double scaleZ;
+
+                if (isExpanded)
+                {
+                    currentWidth = usarExpansionDinamica ? minWidth : widthOthers;
+                    scaleX = (usarExpansionDinamica && widthOthers > 0) ? (minWidth / widthOthers) : 1.0;
+                    scaleZ = 1.4;
+                }
+                else
+                {
+                    currentWidth = widthOthers;
+                    scaleX = 1.0;
+                    scaleZ = 1.0;
+                }
+
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}", "OBJ_DISPLACEMENT[0]", posicionAcumulada, 0.5, 0.3));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/fichaPartido", "OBJ_SCALE[0]", scaleX, 0.5, 0.3));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/fichaPartido", "OBJ_SCALE[2]", scaleZ, 0.5, 0.3));
+
+                if (string.Equals(partido.Codigo, partidoSeleccionado.Codigo, StringComparison.OrdinalIgnoreCase))
+                {
+                    lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DirectoMascara/Directo", "OBJ_DISPLACEMENT[2]", 0, 0.5, 0));
+                    lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG/Escanios", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                    lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP/Escanios", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                    lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG/Porcentaje1", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                    lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG/Diferencia", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                    lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP/Porcentaje1", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                    lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP/Diferencia", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                    lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG", "OBJ_DISPLACEMENT[2]", -7, 0.3, 0.3));
+                    lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP", "OBJ_DISPLACEMENT[2]", -7, 0.3, 0.3));
+                    lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/Logo", "OBJ_DISPLACEMENT[2]", -15, 0.3, 0.3));
+                    lines.Add(EventRun($"VIDEOS/{sceneObjectId}/SALE"));
+                }
+
+                if (i < count - 1)
+                {
+                    posicionAcumulada += currentWidth + 10;
+                }
+            }
+
+            if (usarExpansionDinamica)
+            {
+                var baseWidth = (numExpandidos == count) ? minWidth : widthOthers;
+                lines.Add(ItemGoNumeric("fichaPartido", "PRIM_RECGLO_LEN[0]", baseWidth, 0.5, 0.3));
+                var ultimoAncho = state.PartidosExpandidos.Any(c => string.Equals(c, partidosActivos[^1].Codigo, StringComparison.OrdinalIgnoreCase))
+                    ? minWidth
+                    : widthOthers;
+                lines.AddRange(BuildRecolocarPartidosNoActivosLines(
+                    partidoIdMap,
+                    partidosActivos,
+                    tipo,
+                    posicionAcumulada + ultimoAncho,
+                    baseWidth,
+                    useItemGo: true,
+                    animTime: 0.5,
+                    delay: 0.3));
+            }
+
+            return lines;
+        }
     }
 
-    private IEnumerable<string> ResolveVideoInTodos(BrainStormSnapshot snapshot)
+    private IEnumerable<string> ResolveVideoInTodos(OperationRequest request, BrainStormSnapshot snapshot)
     {
-        return snapshot.Partidos
-            .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
-            .Select(p => ItemSetNoValue($"TICKER/FNC_Video{p.Codigo}", "MAP_EXE"))
-            .ToList();
+        lock (_stateLock)
+        {
+            var state = GetOrCreateFaldonState(request.Module);
+            var partidosActivos = GetOrderedActiveParties(snapshot, request.Oficiales);
+            foreach (var p in partidosActivos)
+            {
+                if (!state.PartidosExpandidos.Any(c => string.Equals(c, p.Codigo, StringComparison.OrdinalIgnoreCase)))
+                {
+                    state.PartidosExpandidos.Add(p.Codigo);
+                }
+            }
+
+            return BuildVideoInLines(request.Oficiales, snapshot, state, triggeredPartyCode: null);
+        }
     }
 
-    private IEnumerable<string> ResolveVideoOutTodos(BrainStormSnapshot snapshot)
+    private IEnumerable<string> ResolveVideoOutTodos(OperationRequest request, BrainStormSnapshot snapshot)
     {
-        var lines = snapshot.Partidos
-            .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
-            .Select(p => EventRun($"VIDEOS/{ResolvePartySlotId(snapshot, p.Codigo)}/SALE"))
-            .ToList();
+        lock (_stateLock)
+        {
+            var state = GetOrCreateFaldonState(request.Module);
+            return ResolveVideoOutTodosInternal(request, snapshot, state);
+        }
+    }
+
+    private static List<string> ResolveVideoOutTodosInternal(
+        OperationRequest request,
+        BrainStormSnapshot snapshot,
+        FaldonState state)
+    {
+        var lines = new List<string>();
+        if (state.PartidosExpandidos.Count == 0)
+        {
+            return lines;
+        }
+
+        var partidosCerrando = state.PartidosExpandidos.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        state.PartidosExpandidos.Clear();
+
         lines.Add(EventRun("Titular/Recuperar"));
+
+        var partidoIdMap = BuildPartidoIdMap(snapshot);
+        var partidosActivos = GetOrderedActiveParties(snapshot, request.Oficiales);
+        var count = partidosActivos.Count;
+        if (count == 0)
+        {
+            return lines;
+        }
+
+        var usarExpansionDinamica = count > 4;
+        var totalWidthAvailable = 1748.0 - (10 * (count - 1));
+        var widthOthers = totalWidthAvailable / count;
+        var tipo = request.Oficiales ? "Escrutinio" : "Sondeo";
+        double posicionAcumulada = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            var partido = partidosActivos[i];
+            var sceneObjectId = GetPartyIdFromMap(partidoIdMap, partido.Codigo, i + 1);
+
+            lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}", "OBJ_DISPLACEMENT[0]", posicionAcumulada, 0.5, 0.3));
+            lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/fichaPartido", "OBJ_SCALE[0]", 1.0, 0.5, 0.3));
+            lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/fichaPartido", "OBJ_SCALE[2]", 1.0, 0.5, 0.3));
+
+            if (partidosCerrando.Contains(partido.Codigo))
+            {
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DirectoMascara/Directo", "OBJ_DISPLACEMENT[2]", 0, 0.5, 0));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG/Escanios", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP/Escanios", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG/Porcentaje1", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG/Diferencia", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP/Porcentaje1", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP/Diferencia", "OBJ_HOTPOINT[1]", 0, 0.3, 0.3));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosG", "OBJ_DISPLACEMENT[2]", -7, 0.3, 0.3));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/DatosP", "OBJ_DISPLACEMENT[2]", -7, 0.3, 0.3));
+                lines.Add(ItemGoNumeric($"Graficos/{tipo}/partidos/partido{sceneObjectId}/Logo", "OBJ_DISPLACEMENT[2]", -15, 0.3, 0.3));
+                lines.Add(EventRun($"VIDEOS/{sceneObjectId}/SALE"));
+            }
+
+            if (i < count - 1)
+            {
+                posicionAcumulada += widthOthers + 10;
+            }
+        }
+
+        if (usarExpansionDinamica)
+        {
+            lines.Add(ItemGoNumeric("fichaPartido", "PRIM_RECGLO_LEN[0]", widthOthers, 0.5, 0.3));
+            lines.AddRange(BuildRecolocarPartidosNoActivosLines(
+                partidoIdMap,
+                partidosActivos,
+                tipo,
+                posicionAcumulada + widthOthers,
+                widthOthers,
+                useItemGo: true,
+                animTime: 0.5,
+                delay: 0.3));
+        }
+
         return lines;
+    }
+
+    private IEnumerable<string> ResolveTickerTdEntra(OperationRequest request, BrainStormSnapshot snapshot)
+    {
+        lock (_stateLock)
+        {
+            var state = GetOrCreateFaldonState(request.Module);
+            var partidosOrdenados = GetOrderedPartiesForSnapshot(snapshot, request.Oficiales);
+            var partidosActivos = partidosOrdenados.Where(p => ResolveEscanos(p, request.Oficiales) > 0).ToList();
+            var partidosNoActivos = partidosOrdenados.Where(p => ResolveEscanos(p, request.Oficiales) == 0).ToList();
+
+            var count = Math.Clamp(partidosActivos.Count, 1, 12);
+            if (!TickerTdLayouts.TryGetValue(count, out var layout))
+            {
+                return [];
+            }
+
+            state.LastTickerTdActiveSiglas = partidosActivos
+                .Take(count)
+                .Select(p => NormalizeSiglasForScene(p.Siglas))
+                .ToList();
+
+            var lines = new List<string>
+            {
+                ItemGoString("NumeroEscrutado", "TEXT_STRING", $"{snapshot.Escrutado.ToString("0.##", CultureInfo.InvariantCulture)}%", 0.5, 0),
+                ItemGoNumeric("Pastilla", "PRIM_BAR_LEN[0]", layout.Size, 0.5, 0)
+            };
+
+            for (int i = 0; i < count && i < partidosActivos.Count; i++)
+            {
+                var partido = partidosActivos[i];
+                var siglaObj = NormalizeSiglasForScene(partido.Siglas);
+                lines.Add(ItemGoNumeric($"Partidos/{siglaObj}", "OBJ_DISPLACEMENT[0]", layout.Positions[i], 0.5, 0));
+                lines.Add(ItemSetNumeric($"Partidos/{siglaObj}/Logo", "OBJ_DISPLACEMENT[0]", layout.LogoPos));
+                lines.Add(ItemSetNumeric($"Partidos/{siglaObj}/Escaños", "OBJ_DISPLACEMENT[0]", layout.EscanosPos));
+                lines.Add(ItemGoNumeric($"DatoTD/{siglaObj}", "MAP_INT_PAR", ResolveEscanos(partido, request.Oficiales), 0.5, 0));
+            }
+
+            foreach (var partido in partidosNoActivos)
+            {
+                var siglaObj = NormalizeSiglasForScene(partido.Siglas);
+                lines.Add(ItemGoNumeric($"Partidos/{siglaObj}", "OBJ_DISPLACEMENT[0]", 1370, 0.5, 0));
+                lines.Add(ItemSetNumeric($"Partidos/{siglaObj}/Logo", "OBJ_DISPLACEMENT[0]", layout.LogoPos));
+                lines.Add(ItemSetNumeric($"Partidos/{siglaObj}/Escaños", "OBJ_DISPLACEMENT[0]", layout.EscanosPos));
+                lines.Add(ItemGoNumeric($"DatoTD/{siglaObj}", "MAP_INT_PAR", 0, 0.5, 0));
+            }
+
+            lines.Add(EventRun("FALDON_TD/ENTRA"));
+            return lines;
+        }
+    }
+
+    private IEnumerable<string> ResolveTickerTdActualiza(OperationRequest request, BrainStormSnapshot snapshot)
+    {
+        lock (_stateLock)
+        {
+            var state = GetOrCreateFaldonState(request.Module);
+            var partidosOrdenados = GetOrderedPartiesForSnapshot(snapshot, request.Oficiales);
+            var partidosActivos = partidosOrdenados.Where(p => ResolveEscanos(p, request.Oficiales) > 0).ToList();
+            var partidosNoActivos = partidosOrdenados.Where(p => ResolveEscanos(p, request.Oficiales) == 0).ToList();
+
+            var count = Math.Clamp(partidosActivos.Count, 1, 12);
+            if (!TickerTdLayouts.TryGetValue(count, out var layout))
+            {
+                return [];
+            }
+
+            var oldPositions = state.LastTickerTdActiveSiglas
+                .Select((sigla, index) => (sigla, index))
+                .ToDictionary(x => x.sigla, x => x.index, StringComparer.OrdinalIgnoreCase);
+
+            var lines = new List<string>
+            {
+                ItemGoString("NumeroEscrutado", "TEXT_STRING", $"{snapshot.Escrutado.ToString("0.##", CultureInfo.InvariantCulture)}%", 0.5, 0),
+                ItemGoNumeric("Pastilla", "PRIM_BAR_LEN[0]", layout.Size, 0.5, 0)
+            };
+
+            for (int i = 0; i < count && i < partidosActivos.Count; i++)
+            {
+                var partido = partidosActivos[i];
+                var siglaObj = NormalizeSiglasForScene(partido.Siglas);
+                var newPosIndex = i;
+
+                if (oldPositions.TryGetValue(siglaObj, out var oldPosIndex) && oldPosIndex > newPosIndex)
+                {
+                    lines.Add(ItemGoNumeric($"Partidos/{siglaObj}", "OBJ_DISPLACEMENT[1]", -100, 0.25, 0));
+                    lines.Add(ItemGoNumeric($"Partidos/{siglaObj}", "OBJ_DISPLACEMENT[0]", layout.Positions[newPosIndex], 0.5, 0.25));
+                    lines.Add(ItemGoNumeric($"Partidos/{siglaObj}", "OBJ_DISPLACEMENT[1]", 0, 0.25, 0.75));
+                }
+                else
+                {
+                    lines.Add(ItemGoNumeric($"Partidos/{siglaObj}", "OBJ_DISPLACEMENT[0]", layout.Positions[newPosIndex], 0.5, 0));
+                }
+
+                lines.Add(ItemSetNumeric($"Partidos/{siglaObj}/Logo", "OBJ_DISPLACEMENT[0]", layout.LogoPos));
+                lines.Add(ItemSetNumeric($"Partidos/{siglaObj}/Escaños", "OBJ_DISPLACEMENT[0]", layout.EscanosPos));
+                lines.Add(ItemGoNumeric($"DatoTD/{siglaObj}", "MAP_INT_PAR", ResolveEscanos(partido, request.Oficiales), 0.5, 0));
+            }
+
+            foreach (var partido in partidosNoActivos)
+            {
+                var siglaObj = NormalizeSiglasForScene(partido.Siglas);
+                lines.Add(ItemGoNumeric($"Partidos/{siglaObj}", "OBJ_DISPLACEMENT[0]", 1370, 0.5, 0));
+                lines.Add(ItemSetNumeric($"Partidos/{siglaObj}/Logo", "OBJ_DISPLACEMENT[0]", layout.LogoPos));
+                lines.Add(ItemSetNumeric($"Partidos/{siglaObj}/Escaños", "OBJ_DISPLACEMENT[0]", layout.EscanosPos));
+                lines.Add(ItemGoNumeric($"DatoTD/{siglaObj}", "MAP_INT_PAR", 0, 0.5, 0));
+            }
+
+            state.LastTickerTdActiveSiglas = partidosActivos
+                .Take(count)
+                .Select(p => NormalizeSiglasForScene(p.Siglas))
+                .ToList();
+
+            return lines;
+        }
     }
 
     private IEnumerable<string> ResolveFaldonSedesEntra(OperationRequest request, BrainStormSnapshot snapshot)
@@ -552,11 +1195,28 @@ public sealed class DefaultSignalComposer : ISignalComposer
             return [];
         }
 
+        lock (_stateLock)
+        {
+            var state = GetOrCreateSedesState(request.Module);
+            state.IsSuperfaldonSedeOnAir = true;
+        }
+
         return
         [
             MapString("codigoSede", $"'{partyCode}'"),
             EventRun("Superfaldon/Sedes/DespliegaSede")
         ];
+    }
+
+    private IEnumerable<string> ResolveSuperfaldonSedesSale(OperationRequest request)
+    {
+        lock (_stateLock)
+        {
+            var state = GetOrCreateSedesState(request.Module);
+            state.IsSuperfaldonSedeOnAir = false;
+        }
+
+        return [EventRun("Superfaldon/Sedes/RepliegaSede")];
     }
 
     private IEnumerable<string> ResolveSuperfaldonSedesEncadena(OperationRequest request, BrainStormSnapshot snapshot)
@@ -961,6 +1621,140 @@ public sealed class DefaultSignalComposer : ISignalComposer
         }
     }
 
+    private static Dictionary<string, string> BuildPartidoIdMap(BrainStormSnapshot snapshot)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var basePartidos = snapshot.CsvTemplatePartidos is { Count: > 0 }
+            ? snapshot.CsvTemplatePartidos
+            : snapshot.Partidos;
+
+        var idx = 1;
+        foreach (var partido in basePartidos
+            .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
+            .OrderBy(p => p.Codigo, StringComparer.OrdinalIgnoreCase))
+        {
+            if (map.TryAdd(partido.Codigo, idx.ToString("D2", CultureInfo.InvariantCulture)))
+            {
+                idx++;
+            }
+        }
+
+        foreach (var partido in snapshot.Partidos
+            .Where(p => !string.IsNullOrWhiteSpace(p.Codigo))
+            .OrderBy(p => p.Codigo, StringComparer.OrdinalIgnoreCase))
+        {
+            if (map.TryAdd(partido.Codigo, idx.ToString("D2", CultureInfo.InvariantCulture)))
+            {
+                idx++;
+            }
+        }
+
+        return map;
+    }
+
+    private static string GetPartyIdFromMap(Dictionary<string, string> map, string codigo, int fallbackIndex)
+    {
+        if (!string.IsNullOrWhiteSpace(codigo) && map.TryGetValue(codigo, out var id))
+        {
+            return id;
+        }
+
+        return fallbackIndex.ToString("D2", CultureInfo.InvariantCulture);
+    }
+
+    private static List<PartidoSnapshot> GetOrderedPartiesForSnapshot(BrainStormSnapshot snapshot, bool oficiales)
+    {
+        var list = snapshot.Partidos.ToList();
+        list.Sort((x, y) => CompareLegacyAscending(x, y, oficiales));
+        list.Reverse();
+        return list;
+    }
+
+    private static List<PartidoSnapshot> GetOrderedActiveParties(BrainStormSnapshot snapshot, bool oficiales)
+    {
+        return GetOrderedPartiesForSnapshot(snapshot, oficiales)
+            .Where(p => ResolveEscanos(p, oficiales) > 0)
+            .ToList();
+    }
+
+    private static int CompareLegacyAscending(PartidoSnapshot? x, PartidoSnapshot? y, bool oficiales)
+    {
+        if (ReferenceEquals(x, y))
+        {
+            return 0;
+        }
+
+        if (x is null)
+        {
+            return -1;
+        }
+
+        if (y is null)
+        {
+            return 1;
+        }
+
+        var xSeats = ResolveEscanos(x, oficiales);
+        var ySeats = ResolveEscanos(y, oficiales);
+
+        if (string.Equals(x.Codigo, "99999", StringComparison.OrdinalIgnoreCase))
+        {
+            if (xSeats > 0)
+            {
+                return ySeats == 0 ? 1 : -1;
+            }
+            return -1;
+        }
+
+        if (string.Equals(y.Codigo, "99999", StringComparison.OrdinalIgnoreCase))
+        {
+            if (ySeats > 0)
+            {
+                return xSeats == 0 ? -1 : 1;
+            }
+            return 1;
+        }
+
+        if (oficiales)
+        {
+            var cmp = x.Escanios.CompareTo(y.Escanios);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+
+            cmp = x.PorcentajeVoto.CompareTo(y.PorcentajeVoto);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+
+            return x.Votos.CompareTo(y.Votos);
+        }
+        else
+        {
+            var cmp = x.EscaniosHastaSondeo.CompareTo(y.EscaniosHastaSondeo);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+
+            cmp = x.EscaniosDesdeSondeo.CompareTo(y.EscaniosDesdeSondeo);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+
+            cmp = x.PorcentajeVoto.CompareTo(y.PorcentajeVoto);
+            if (cmp != 0)
+            {
+                return cmp;
+            }
+
+            return x.EscaniosHistoricos.CompareTo(y.EscaniosHistoricos);
+        }
+    }
+
     private static string? TryResolvePartySlotId(BrainStormSnapshot snapshot, string commandValue)
     {
         if (!string.IsNullOrWhiteSpace(commandValue)
@@ -1008,14 +1802,10 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
     private static string ResolvePartySlotId(BrainStormSnapshot snapshot, string partyCode)
     {
-        var ordered = snapshot.Partidos
-            .OrderBy(x => x.Codigo, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var index = ordered.FindIndex(x => string.Equals(x.Codigo, partyCode, StringComparison.OrdinalIgnoreCase));
-        if (index >= 0)
+        var map = BuildPartidoIdMap(snapshot);
+        if (map.TryGetValue(partyCode, out var slotId))
         {
-            return (index + 1).ToString("D2", CultureInfo.InvariantCulture);
+            return slotId;
         }
 
         if (int.TryParse(partyCode, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
@@ -1024,17 +1814,6 @@ public sealed class DefaultSignalComposer : ISignalComposer
         }
 
         return "01";
-    }
-
-    private static string ResolveVideoMapSuffix(BrainStormSnapshot snapshot, string commandValue, string slotId)
-    {
-        var party = TryResolveParty(snapshot, commandValue);
-        if (party is not null && !string.IsNullOrWhiteSpace(party.Codigo))
-        {
-            return party.Codigo.Trim();
-        }
-
-        return slotId;
     }
 
     private static string? ResolveSedePartyCode(BrainStormSnapshot snapshot, string commandValue)
@@ -1152,40 +1931,54 @@ public sealed class DefaultSignalComposer : ISignalComposer
             }
 
             var snapshotActual = BuildUltimoEscanoSnapshot(snapshot);
-            var hayCambio = state.UltimoSnapshotInicializado
-                && !string.Equals(state.UltimoSnapshot, snapshotActual, StringComparison.Ordinal);
+            var (ultimoAnterior, luchaAnterior) = SplitUltimoSnapshot(state.UltimoSnapshot);
+            var (ultimoActual, luchaActual) = SplitUltimoSnapshot(snapshotActual);
+
+            var cambioUltimo = state.UltimoSnapshotInicializado
+                && !string.Equals(ultimoAnterior, ultimoActual, StringComparison.Ordinal);
+            var cambioLucha = state.UltimoSnapshotInicializado
+                && !string.Equals(luchaAnterior, luchaActual, StringComparison.Ordinal);
 
             state.UltimoSnapshot = snapshotActual;
             state.UltimoSnapshotInicializado = true;
-            state.UltimoCambioDetectado = hayCambio;
+            state.UltimoCambioDetectado = cambioUltimo || cambioLucha;
 
-            if (request.Module == GraphicModule.Carton)
+            if (cambioUltimo)
             {
-                if (hayCambio)
-                {
-                    lines.Add(EventRun("UltimoEscanoN/Cambio"));
-                }
-                else
-                {
-                    var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
-                    lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
-                    lines.Add(ItemSetNoValue("UltimoEscanoCSV", "MAP_LLSTRING_LOAD"));
-                }
-
+                lines.Add(EventRun("UltimoEscanoN/Cambio"));
                 return true;
             }
 
-            if (hayCambio)
+            if (cambioLucha)
             {
-                lines.Add(EventRun("UltimoEscanoSF/Cambio"));
-            }
-            else
-            {
-                lines.Add(EventRun("ReloadPartidos"));
+                lines.Add(EventRun("UltimoEscanoN/CambioAbajo"));
+                return true;
             }
 
+            if (request.Module == GraphicModule.Carton)
+            {
+                var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
+                lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                lines.Add(ItemSetNoValue("UltimoEscanoNDatos/CSV", "MAP_LLSTRING_LOAD"));
+                return true;
+            }
+
+            lines.Add(EventRun("ReloadPartidos"));
             return true;
         }
+    }
+
+    private static (string Ultimo, string Lucha) SplitUltimoSnapshot(string raw)
+    {
+        if (string.IsNullOrEmpty(raw))
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var parts = raw.Split('|', 2);
+        var u = parts.Length > 0 ? parts[0] : string.Empty;
+        var l = parts.Length > 1 ? parts[1] : string.Empty;
+        return (u, l);
     }
 
     private static bool IsUltimoScene(string scene)
@@ -1235,6 +2028,371 @@ public sealed class DefaultSignalComposer : ISignalComposer
         return $"U:{string.Join(",", ultimo)}|L:{string.Join(",", lucha)}";
     }
 
+    private bool TryComposeCartonScene(OperationRequest request, BrainStormSnapshot snapshot, string scene, List<string> lines)
+    {
+        var normalized = scene.ToUpperInvariant();
+        return normalized switch
+        {
+            "PARTICIPACION" => ComposeCartonParticipacion(request, snapshot, lines),
+            "CCAA_CARTONES" => ComposeCartonCcaa(request, snapshot, lines),
+            "MAYORIAS" => ComposeCartonMayorias(request, snapshot, lines),
+            "CARRUSEL" => ComposeCartonCarrusel(request, snapshot, lines),
+            "CARTON_PARTIDOS" => ComposeCartonPartidos(request, snapshot, lines),
+            "ULTIMO_ESCANO" or "ULTIMOESCANO" => ComposeCartonUltimoEscano(request, lines),
+            _ => false
+        };
+    }
+
+    private static List<string> ResolveMapaProvinciasNames(BrainStormSnapshot snapshot)
+    {
+        if (snapshot.Circunscripcion.Codigo.EndsWith("00000", StringComparison.OrdinalIgnoreCase)
+            && snapshot.ProvinciasAutonomia.Count > 0)
+        {
+            return snapshot.ProvinciasAutonomia
+                .Where(p => !string.IsNullOrWhiteSpace(p.Nombre))
+                .Select(p => p.Nombre.Trim())
+                .ToList();
+        }
+
+        return string.IsNullOrWhiteSpace(snapshot.Circunscripcion.Nombre)
+            ? []
+            : [snapshot.Circunscripcion.Nombre.Trim()];
+    }
+
+    private static bool ComposeCartonParticipacion(OperationRequest request, BrainStormSnapshot snapshot, List<string> lines)
+    {
+        switch (request.Action)
+        {
+            case OperationActionType.Prepare:
+                lines.Add(EventRun("PARTICIPACION/PREPARA"));
+                return true;
+
+            case OperationActionType.Exit:
+                lines.Add(EventRun("PARTICIPACION/SALE"));
+                return true;
+
+            case OperationActionType.Enter:
+            case OperationActionType.Update:
+                var isEnter = request.Action == OperationActionType.Enter;
+                lines.Add(EventRun(isEnter ? "PARTICIPACION/PREPARA" : "PARTICIPACION/ENCADENA"));
+
+                var provincias = ResolveMapaProvinciasNames(snapshot);
+                var mapDelay = isEnter ? 0.0 : 0.3;
+                foreach (var prov in provincias)
+                {
+                    lines.Add(ItemGoNumeric($"Participacion/Mapa/{prov}", "OBJ_CULL", 0, 0.3, mapDelay));
+                }
+
+                lines.Add(ItemSetString("Participacion/LugarTxt", "TEXT_STRING", snapshot.Circunscripcion.Nombre));
+
+                var (leftTime, rightTime, leftVal, rightVal) = snapshot.Avance switch
+                {
+                    1 => (snapshot.HoraAvance1Historico, snapshot.HoraAvance1, snapshot.Avance1Historico, snapshot.Avance1),
+                    2 => (snapshot.HoraAvance2Historico, snapshot.HoraAvance2, snapshot.Avance2Historico, snapshot.Avance2),
+                    3 => (snapshot.HoraAvance3Historico, snapshot.HoraAvance3, snapshot.Avance3Historico, snapshot.Avance3),
+                    _ => ("100%", "100%", snapshot.ParticipacionHistorica, snapshot.Participacion)
+                };
+
+                lines.Add(ItemSetString("Participacion/Hora_Izq", "TEXT_STRING", leftTime));
+                lines.Add(ItemSetString("Participacion/Hora_Dch", "TEXT_STRING", rightTime));
+
+                var barDelay = isEnter ? 0.6 : 0.3;
+                lines.Add(ItemGoNumeric("Participacion_Barra_Izq", "MAP_FLOAT_PAR", Math.Round(leftVal, 2), 0.5, barDelay));
+                lines.Add(ItemGoNumeric("Participacion_Barra_Dch", "MAP_FLOAT_PAR", Math.Round(rightVal, 2), 0.5, barDelay));
+
+                if (rightVal < 25.0)
+                {
+                    lines.Add(isEnter
+                        ? ItemSetNumeric("Participacion/Barras/Barra_Dch/Txt_Dch", "OBJ_OFFSET[2]", 322)
+                        : ItemGoNumeric("Participacion/Barras/Barra_Dch/Txt_Dch", "OBJ_OFFSET[2]", 322, 0.5, 0));
+                    lines.Add(ItemSetString("Participacion/Txt_Dch", "TEXT_FONT", "Heavy_Naranja"));
+                    lines.Add(ItemSetString("Participacion/Txt_Izq", "TEXT_FONT", "Heavy"));
+                }
+                else
+                {
+                    lines.Add(isEnter
+                        ? ItemSetNumeric("Participacion/Barras/Barra_Dch/Txt_Dch", "OBJ_OFFSET[2]", 190)
+                        : ItemGoNumeric("Participacion/Barras/Barra_Dch/Txt_Dch", "OBJ_OFFSET[2]", 190, 0.5, 0));
+                    lines.Add(ItemSetString("Participacion/Txt_Dch", "TEXT_FONT", "Heavy_Negro"));
+                    lines.Add(ItemSetString("Participacion/Txt_Izq", "TEXT_FONT", "Heavy_Negro"));
+                }
+
+                if (isEnter)
+                {
+                    lines.Add(EventRun("PARTICIPACION/ENTRA"));
+                }
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool ComposeCartonCcaa(OperationRequest request, BrainStormSnapshot snapshot, List<string> lines)
+    {
+        switch (request.Action)
+        {
+            case OperationActionType.Prepare:
+                lines.Add(EventRun("CCAA_CARTONES/PREPARA"));
+                return true;
+            case OperationActionType.Update:
+                lines.Add(EventRun("CCAA/CAMBIA"));
+                return true;
+            case OperationActionType.Exit:
+                lines.Add(EventRun("CCAA/SALE"));
+                return true;
+            case OperationActionType.Enter:
+                lines.Add(EventRun("CCAA_CARTONES/PREPARA"));
+                lines.Add(ItemSetString("CCAA_Carton/LugarTxt", "TEXT_STRING", snapshot.Circunscripcion.Nombre));
+                foreach (var prov in ResolveMapaProvinciasNames(snapshot))
+                {
+                    lines.Add(ItemGoNumeric($"CCAA_Carton/Mapa/{prov}", "OBJ_CULL", 0, 0.3, 0));
+                }
+
+                var partidos = GetOrderedPartiesForSnapshot(snapshot, request.Oficiales);
+                for (int i = 0; i < partidos.Count; i++)
+                {
+                    var sigla = NormalizeSiglasForScene(partidos[i].Siglas);
+                    lines.Add(ItemSetNumeric($"CCAA_Carton/Fichas/{sigla}", "OBJ_DISPLACEMENT[2]", i * -110));
+                    lines.Add(ItemSetNumeric($"CCAA_Carton/Fichas/{sigla}", "OBJ_CULL", 0));
+                }
+
+                lines.Add(EventRun("CCAA_CARTONES/ENTRA"));
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool ComposeCartonMayorias(OperationRequest request, BrainStormSnapshot snapshot, List<string> lines)
+    {
+        switch (request.Action)
+        {
+            case OperationActionType.Prepare:
+                lines.Add(EventRun("MAYORIAS/PREPARA"));
+                return true;
+            case OperationActionType.Exit:
+                lines.Add(EventRun("MAYORIAS/SALE"));
+                return true;
+            case OperationActionType.Enter:
+                lines.Add(EventRun("MAYORIAS/PREPARA"));
+                lines.Add(ItemSetString("Mayorias/LugarTxt1", "TEXT_STRING", snapshot.Circunscripcion.Nombre));
+
+                var partidos = GetOrderedPartiesForSnapshot(snapshot, request.Oficiales);
+                var topSigla = partidos.Count > 0 ? NormalizeSiglasForScene(partidos[0].Siglas) : string.Empty;
+
+                if (snapshot.ProvinciasAutonomia.Count > 0)
+                {
+                    foreach (var prov in snapshot.ProvinciasAutonomia)
+                    {
+                        var color = !string.IsNullOrWhiteSpace(prov.SiglaGanador)
+                            ? NormalizeSiglasForScene(prov.SiglaGanador)
+                            : topSigla;
+                        lines.Add(ItemSetString($"Mayorias/{prov.Nombre}", "MAT_LIST_COLOR", color));
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(snapshot.Circunscripcion.Nombre) && !string.IsNullOrWhiteSpace(topSigla))
+                {
+                    lines.Add(ItemSetString($"Mayorias/{snapshot.Circunscripcion.Nombre}", "MAT_LIST_COLOR", topSigla));
+                }
+
+                for (int i = 0; i < partidos.Count; i++)
+                {
+                    var sigla = NormalizeSiglasForScene(partidos[i].Siglas);
+                    lines.Add(ItemSetNumeric($"Mapa_Mayorias/Fichas/{sigla}", "OBJ_DISPLACEMENT[2]", i * -100));
+                    lines.Add(ItemGoNumeric($"Mapa_Mayorias/Fichas/{sigla}", "OBJ_CULL", 0, 0, 0.5));
+                }
+
+                var pagesToShow = Math.Clamp((int)Math.Ceiling(partidos.Count / 6.0), 1, 3);
+                for (int page = 1; page <= 3; page++)
+                {
+                    lines.Add(ItemGoNumeric($"Mapa_Mayorias/Paginas/Pagina{page}", "OBJ_CULL", page <= pagesToShow ? 0 : 1, 0.3, 0));
+                }
+
+                lines.Add(EventRun("MAYORIAS/ENTRA"));
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private bool ComposeCartonCarrusel(OperationRequest request, BrainStormSnapshot snapshot, List<string> lines)
+    {
+        var modeFolder = request.Oficiales ? "Oficiales" : "Sondeo";
+        var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
+        var partidos = GetOrderedPartiesForSnapshot(snapshot, request.Oficiales);
+
+        lock (_stateLock)
+        {
+            var state = GetOrCreateCartonState(request.Module);
+
+            switch (request.Action)
+            {
+                case OperationActionType.Prepare:
+                    lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                    lines.Add(EventRun("CARRUSEL/PREPARA"));
+                    return true;
+
+                case OperationActionType.Exit:
+                    lines.Add(EventRun("CARRUSEL/SALE"));
+                    return true;
+
+                case OperationActionType.Enter:
+                    lines.Add(EventRun(request.Oficiales ? "CARRUSEL/OFICIAL" : "CARRUSEL/SONDEO"));
+                    foreach (var p in partidos)
+                    {
+                        var sigla = NormalizeSiglasForScene(p.Siglas);
+                        lines.Add(ItemSetNumeric($"Carton_Carrusel/{modeFolder}/{sigla}", "OBJ_DISPLACEMENT[0]", 1920));
+                    }
+
+                    var selectedParty = TryResolveParty(snapshot, request.CommandValue) ?? partidos.FirstOrDefault();
+                    if (selectedParty is not null)
+                    {
+                        var siglaSel = NormalizeSiglasForScene(selectedParty.Siglas);
+                        state.CurrentCarruselSigla = siglaSel;
+                        lines.Add(ItemGoNumeric($"Carton_Carrusel/{modeFolder}/{siglaSel}", "OBJ_DISPLACEMENT[0]", 0, 0.5, 0));
+                    }
+
+                    lines.Add(EventRun("CARRUSEL/ENTRA"));
+                    return true;
+
+                case OperationActionType.Update:
+                    foreach (var p in partidos)
+                    {
+                        var sigla = NormalizeSiglasForScene(p.Siglas);
+                        if (!string.Equals(sigla, state.CurrentCarruselSigla, StringComparison.OrdinalIgnoreCase))
+                        {
+                            lines.Add(ItemSetNumeric($"Carton_Carrusel/{modeFolder}/{sigla}", "OBJ_DISPLACEMENT[0]", 1920));
+                        }
+                    }
+
+                    lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+    }
+
+    private IEnumerable<string> ResolveCarruselEncadena(OperationRequest request, BrainStormSnapshot snapshot)
+    {
+        var modeFolder = request.Oficiales ? "Oficiales" : "Sondeo";
+        var partidos = GetOrderedPartiesForSnapshot(snapshot, request.Oficiales);
+        if (partidos.Count == 0)
+        {
+            return [];
+        }
+
+        lock (_stateLock)
+        {
+            var state = GetOrCreateCartonState(request.Module);
+            var lines = new List<string>();
+            var prevSigla = state.CurrentCarruselSigla;
+
+            var nextParty = TryResolveParty(snapshot, request.CommandValue);
+            if (nextParty is null)
+            {
+                var currentIndex = partidos.FindIndex(p =>
+                    string.Equals(NormalizeSiglasForScene(p.Siglas), prevSigla, StringComparison.OrdinalIgnoreCase));
+                var nextIndex = currentIndex >= 0 ? (currentIndex + 1) % partidos.Count : 0;
+                nextParty = partidos[nextIndex];
+            }
+
+            var nextSigla = NormalizeSiglasForScene(nextParty.Siglas);
+            if (!string.IsNullOrWhiteSpace(prevSigla) && !string.Equals(prevSigla, nextSigla, StringComparison.OrdinalIgnoreCase))
+            {
+                lines.Add(ItemGoNumeric($"Carton_Carrusel/{modeFolder}/{prevSigla}", "OBJ_DISPLACEMENT[0]", -1920, 0.5, 0));
+            }
+
+            lines.Add(ItemGoNumeric($"Carton_Carrusel/{modeFolder}/{nextSigla}", "OBJ_DISPLACEMENT[0]", 0, 0.5, 0));
+            state.CurrentCarruselSigla = nextSigla;
+            return lines;
+        }
+    }
+
+    private static bool ComposeCartonPartidos(OperationRequest request, BrainStormSnapshot snapshot, List<string> lines)
+    {
+        switch (request.Action)
+        {
+            case OperationActionType.Prepare:
+                lines.Add(EventRun("CARTON_PARTIDOS/PREPARA"));
+                return true;
+
+            case OperationActionType.Exit:
+                lines.Add(EventRun("CARTON_PARTIDOS/SALE"));
+                return true;
+
+            case OperationActionType.Enter:
+            case OperationActionType.Update:
+                var isEnter = request.Action == OperationActionType.Enter;
+                var partidos = GetOrderedPartiesForSnapshot(snapshot, request.Oficiales);
+
+                for (int i = 0; i < partidos.Count; i++)
+                {
+                    var sigla = NormalizeSiglasForScene(partidos[i].Siglas);
+                    var x = i < 7 ? 0 : 918;
+                    var y = (i == 0 ? 0.0 : -0.2 * i).ToString("0.0", CultureInfo.InvariantCulture);
+                    var z = i < 7 ? (-100 * i) : (100 - (100 * (i - 7)));
+
+                    lines.Add(isEnter
+                        ? $"itemset('<{{BD}}>Carton_Partidos/Fichas/{sigla}','OBJ_DISPLACEMENT',({x},{y},{z}));"
+                        : $"itemgo('<{{BD}}>Carton_Partidos/Fichas/{sigla}','OBJ_DISPLACEMENT',({x},{y},{z}),0.5,0);");
+                }
+
+                var dotCulture = (NumberFormatInfo)CultureInfo.InvariantCulture.NumberFormat.Clone();
+                dotCulture.NumberGroupSeparator = ".";
+
+                foreach (var p in partidos)
+                {
+                    var sigla = NormalizeSiglasForScene(p.Siglas);
+                    var escanios = ResolveEscanos(p, request.Oficiales);
+                    var pct = p.PorcentajeVoto.ToString("0.##", CultureInfo.InvariantCulture);
+                    var votos = p.Votos.ToString("#,##0", dotCulture);
+
+                    lines.Add(ItemSetString($"Mayorias1/{sigla}/Partido_Escanos1", "TEXT_STRING", escanios.ToString(CultureInfo.InvariantCulture)));
+                    lines.Add($"itemset('<{{BD}}>Mayorias1/{sigla}/Partido_Porcentaje1','TEXT_STRING','{pct}\\\\f<Light>%');");
+                    lines.Add($"itemset('<{{BD}}>Mayorias1/{sigla}/Partido_Votos1','TEXT_STRING','{votos}\\\\f<Light> votos');");
+                }
+
+                var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
+                lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                lines.Add(ItemSetNoValue("UltimoEscanoNDatos/CSV", "MAP_LLSTRING_LOAD"));
+
+                if (isEnter)
+                {
+                    lines.Add(EventRun("CARTON_PARTIDOS/ENTRA"));
+                }
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool ComposeCartonUltimoEscano(OperationRequest request, List<string> lines)
+    {
+        var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
+        switch (request.Action)
+        {
+            case OperationActionType.Prepare:
+                lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                lines.Add(ItemSetNoValue("UltimoEscanoNDatos/CSV", "MAP_LLSTRING_LOAD"));
+                lines.Add(EventRun("UltimoEscanoN/PREPARA"));
+                return true;
+            case OperationActionType.Enter:
+                lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                lines.Add(ItemSetNoValue("UltimoEscanoNDatos/CSV", "MAP_LLSTRING_LOAD"));
+                lines.Add(EventRun("UltimoEscanoN/ENTRA"));
+                return true;
+            case OperationActionType.Exit:
+                lines.Add(EventRun("UltimoEscanoN/SALE"));
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private bool ShouldEmitPrimerosResultados(OperationRequest request, string scene)
     {
         if (request.Action != OperationActionType.Enter)
@@ -1260,7 +2418,33 @@ public sealed class DefaultSignalComposer : ISignalComposer
             _pactosStates.Remove(module);
             _sedesStates.Remove(module);
             _ultimoEscanoStates.Remove(module);
+            _faldonStates.Remove(module);
+            _cartonStates.Remove(module);
         }
+    }
+
+    private CartonState GetOrCreateCartonState(GraphicModule module)
+    {
+        if (_cartonStates.TryGetValue(module, out var state))
+        {
+            return state;
+        }
+
+        state = new CartonState();
+        _cartonStates[module] = state;
+        return state;
+    }
+
+    private FaldonState GetOrCreateFaldonState(GraphicModule module)
+    {
+        if (_faldonStates.TryGetValue(module, out var state))
+        {
+            return state;
+        }
+
+        state = new FaldonState();
+        _faldonStates[module] = state;
+        return state;
     }
 
     private PactosState GetOrCreatePactosState(GraphicModule module)
@@ -1319,6 +2503,11 @@ public sealed class DefaultSignalComposer : ISignalComposer
         return $"itemset('<{{BD}}>{path}','{property}','{EscapeValue(value)}');";
     }
 
+    private static string ItemGoString(string path, string property, string value, double animTime, double delay)
+    {
+        return $"itemgo('<{{BD}}>{path}','{property}','{EscapeValue(value)}',{FormatNumber(animTime)},{FormatNumber(delay)});";
+    }
+
     private static string ItemSetNumeric(string path, string property, double value)
     {
         return $"itemset('<{{BD}}>{path}','{property}',{FormatNumber(value)});";
@@ -1342,6 +2531,12 @@ public sealed class DefaultSignalComposer : ISignalComposer
             .Replace("'", "\\'", StringComparison.Ordinal);
     }
 
+    private sealed class FaldonState
+    {
+        public List<string> PartidosExpandidos { get; } = [];
+        public List<string> LastTickerTdActiveSiglas { get; set; } = [];
+    }
+
     private sealed class PactosState
     {
         public List<string> PartidosIzquierda { get; } = [];
@@ -1357,9 +2552,15 @@ public sealed class DefaultSignalComposer : ISignalComposer
         public double AnchoDerechaHasta { get; set; }
     }
 
+    private sealed class CartonState
+    {
+        public string CurrentCarruselSigla { get; set; } = string.Empty;
+    }
+
     private sealed class SedesState
     {
         public string CurrentSlot { get; set; } = "01";
+        public bool IsSuperfaldonSedeOnAir { get; set; }
     }
 
     private sealed class UltimoEscanoState

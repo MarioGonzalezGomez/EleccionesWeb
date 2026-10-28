@@ -1,4 +1,4 @@
-﻿using Elecciones.Application.Models;
+using Elecciones.Application.Models;
 
 namespace Elecciones.Application.Abstractions;
 
@@ -11,6 +11,8 @@ public interface IModuleLockService
     bool TryAcquire(GraphicModule module, string operatorId);
 
     bool Release(GraphicModule module, string operatorId);
+
+    bool ForceRelease(GraphicModule module);
 
     bool IsOwner(GraphicModule module, string operatorId);
 

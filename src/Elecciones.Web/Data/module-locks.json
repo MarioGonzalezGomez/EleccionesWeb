@@ -1,0 +1,32 @@
+[
+  {
+    "Module": 1,
+    "IsLocked": true,
+    "IsOnAir": false,
+    "Owner": "admin",
+    "LockedAtUtc": "2026-05-29T06:38:35.1874276Z",
+    "LastActionUtc": null,
+    "LastActionType": null,
+    "LastScene": ""
+  },
+  {
+    "Module": 2,
+    "IsLocked": false,
+    "IsOnAir": false,
+    "Owner": "",
+    "LockedAtUtc": null,
+    "LastActionUtc": null,
+    "LastActionType": null,
+    "LastScene": ""
+  },
+  {
+    "Module": 3,
+    "IsLocked": false,
+    "IsOnAir": false,
+    "Owner": "",
+    "LockedAtUtc": null,
+    "LastActionUtc": null,
+    "LastActionType": null,
+    "LastScene": ""
+  }
+]

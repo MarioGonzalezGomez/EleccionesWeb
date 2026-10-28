@@ -1,0 +1,768 @@
+@page "/admin"
+@page "/control"
+@page "/operacion"
+@page "/operacion/admin"
+@page "/operacion/diagnostico"
+@attribute [Authorize]
+@implements IDisposable
+@using Elecciones.Application.Abstractions
+@using Elecciones.Application.Models
+@using Elecciones.GraphicsGateway.Options
+@using Elecciones.Infrastructure.Options
+@using Elecciones.Infrastructure.Services
+@using EleccionesWeb.Services
+@inject IGlobalOperationalSettingsService GlobalSettings
+@inject IOperationalConfigurationService ConfigService
+@inject IOperationStateService StateService
+@inject IModuleLockService ModuleLockService
+@inject IOperationService OperationService
+@inject ISignalDiagnosticsService DiagnosticsService
+@inject DatabaseChangeListenerService ChangeListenerService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Control General</PageTitle>
+
+<header class="ws-topbar">
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+        <span class="ws-badge-title">Control General</span>
+        <span class="ws-onair-pill @(faldonState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
+            @(faldonState.IsOnAir ? $"● FALDÓN: {faldonState.ActiveScene}" : "○ FALDÓN: FUERA")
+        </span>
+        <span class="ws-onair-pill @(cartonState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
+            @(cartonState.IsOnAir ? $"● CARTÓN: {cartonState.ActiveScene}" : "○ CARTÓN: FUERA")
+        </span>
+    </div>
+
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+        <span class="badge bg-secondary">
+            Elección @globalSnapshot.ElectionSlot · @GetConnectionLabel(globalSnapshot.ConnectionType) · @globalSnapshot.Target
+        </span>
+        <span class="badge @(globalSnapshot.Oficiales ? "bg-primary" : "bg-warning text-dark")">
+            @(globalSnapshot.Oficiales ? $"OFICIALES (Av.{globalSnapshot.Avance})" : "SONDEO")
+        </span>
+        <span class="badge @(globalSnapshot.AutoRefreshEnabled ? "bg-success" : "bg-secondary")">
+            Auto-Refresh: @(globalSnapshot.AutoRefreshEnabled ? $"ON ({globalSnapshot.AutoRefreshIntervalSeconds}s)" : "OFF")
+        </span>
+        <span class="badge bg-dark border border-secondary">@currentOperatorId</span>
+    </div>
+</header>
+
+<div class="p-3">
+    <div class="ws-tabs">
+        <button type="button" class="ws-tab-btn @(activeTab == ControlTab.GlobalLive ? "active" : "")" @onclick="() => activeTab = ControlTab.GlobalLive">
+            Control Global (En Vivo)
+        </button>
+        <button type="button" class="ws-tab-btn @(activeTab == ControlTab.TechnicalConfig ? "active" : "")" @onclick="() => activeTab = ControlTab.TechnicalConfig">
+            Configuración Técnica
+        </button>
+        <button type="button" class="ws-tab-btn @(activeTab == ControlTab.Diagnostics ? "active" : "")" @onclick="() => activeTab = ControlTab.Diagnostics">
+            Diagnóstico TCP (@entries.Count)
+        </button>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(feedbackMessage))
+    {
+        <div class="alert @(feedbackIsError ? "alert-danger" : "alert-success") py-2 px-3 small d-flex justify-content-between align-items-center mb-3" role="alert">
+            <span>@feedbackMessage</span>
+            <button type="button" class="btn-close btn-sm" @onclick="() => feedbackMessage = string.Empty"></button>
+        </div>
+    }
+
+    @if (activeTab == ControlTab.GlobalLive)
+    {
+        <div class="row g-3">
+            <div class="col-12 col-xl-7">
+                <div class="ws-panel h-100">
+                    <div class="ws-control-group-title">Parámetros Globales de Emisión</div>
+                    <div class="row g-2">
+                        <div class="col-6 col-md-4">
+                            <label class="form-label form-label-sm mb-1">Slot Elecciones</label>
+                            <select class="form-select form-select-sm" value="@globalSnapshot.ElectionSlot" @onchange="OnElectionSlotChanged">
+                                <option value="1">Elecciones 1</option>
+                                <option value="2">Elecciones 2</option>
+                                <option value="3">Elecciones 3</option>
+                            </select>
+                        </div>
+                        <div class="col-6 col-md-4">
+                            <label class="form-label form-label-sm mb-1">Conexión BD</label>
+                            <select class="form-select form-select-sm" value="@globalSnapshot.ConnectionType" @onchange="OnConnectionTypeChanged">
+                                <option value="0">Principal</option>
+                                <option value="1">Reserva</option>
+                                <option value="2">Local</option>
+                            </select>
+                        </div>
+                        <div class="col-6 col-md-4">
+                            <label class="form-label form-label-sm mb-1">Motor Gráfico (Target)</label>
+                            <select class="form-select form-select-sm" value="@globalSnapshot.Target" @onchange="OnTargetChanged">
+                                <option value="@GraphicsTarget.Ipf">IPF</option>
+                                <option value="@GraphicsTarget.Prime">Prime</option>
+                                <option value="@GraphicsTarget.Both">Ambos (IPF + Prime)</option>
+                            </select>
+                        </div>
+                        <div class="col-6 col-md-4">
+                            <label class="form-label form-label-sm mb-1">Modo de Datos</label>
+                            <div class="btn-group btn-group-sm w-100">
+                                <button type="button" class="btn @(globalSnapshot.Oficiales ? "btn-primary" : "btn-outline-secondary")" @onclick="() => SetOficiales(true)">
+                                    Oficiales
+                                </button>
+                                <button type="button" class="btn @(!globalSnapshot.Oficiales ? "btn-warning" : "btn-outline-secondary")" @onclick="() => SetOficiales(false)">
+                                    Sondeo
+                                </button>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-4">
+                            <label class="form-label form-label-sm mb-1">Avance Participación</label>
+                            <select class="form-select form-select-sm" value="@globalSnapshot.Avance" @onchange="OnAvanceChanged">
+                                <option value="0">Sin avance (0)</option>
+                                <option value="1">Avance 1</option>
+                                <option value="2">Avance 2</option>
+                                <option value="3">Avance 3</option>
+                            </select>
+                        </div>
+                        <div class="col-6 col-md-4">
+                            <label class="form-label form-label-sm mb-1">Nombre Exportación CSV</label>
+                            <input class="form-control form-control-sm" value="@globalSnapshot.ExportName" @onchange="OnExportNameChanged" />
+                        </div>
+                        <div class="col-12 mt-2">
+                            <div class="form-check form-switch">
+                                <input id="chkZeroSeats" class="form-check-input" type="checkbox" checked="@globalSnapshot.IncludeZeroSeats" @onchange="OnIncludeZeroSeatsChanged" />
+                                <label class="form-check-label small" for="chkZeroSeats">Incluir partidos con 0 escaños en envíos y exportaciones</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-xl-5">
+                <div class="ws-panel h-100">
+                    <div class="ws-control-group-title">Auto-Refresh de Base de Datos (Servidor)</div>
+                    <div class="row g-2 align-items-end">
+                        <div class="col-6">
+                            <div class="form-check form-switch">
+                                <input id="chkAutoRefresh" class="form-check-input" type="checkbox" checked="@globalSnapshot.AutoRefreshEnabled" @onchange="OnAutoRefreshEnabledChanged" />
+                                <label class="form-check-label small fw-semibold" for="chkAutoRefresh">
+                                    @(globalSnapshot.AutoRefreshEnabled ? "Auto-Refresh Activo" : "Auto-Refresh Pausado")
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label form-label-sm mb-1">Intervalo (2 - 60 seg)</label>
+                            <input type="number" min="2" max="60" class="form-control form-control-sm" value="@globalSnapshot.AutoRefreshIntervalSeconds" @onchange="OnAutoRefreshIntervalChanged" />
+                        </div>
+                        <div class="col-12 mt-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <div class="small text-muted">
+                                <div><strong>Última comprobación:</strong> @(globalSnapshot.LastAutoRefreshCheckUtc?.ToLocalTime().ToString("HH:mm:ss") ?? "-")</div>
+                                <div><strong>Última actualización:</strong> @(globalSnapshot.LastAutoRefreshAppliedUtc?.ToLocalTime().ToString("HH:mm:ss") ?? "-")</div>
+                                <div><strong>Estado:</strong> @(string.IsNullOrWhiteSpace(globalSnapshot.LastAutoRefreshStatus) ? "-" : globalSnapshot.LastAutoRefreshStatus)</div>
+                            </div>
+                            <button type="button" class="btn btn-sm btn-outline-primary" @onclick="CheckDatabaseChangesNowAsync" disabled="@checkingDbChanges">
+                                @(checkingDbChanges ? "Comprobando..." : "Comprobar BD ahora")
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+            @foreach (var module in SupervisedModules)
+            {
+                var state = StateService.GetState(module);
+                var lockInfo = GetModuleLockInfo(module);
+                <div class="col-12 col-md-6">
+                    <div class="ws-panel @(state.IsOnAir ? "border-success" : "")">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="ws-control-group-title mb-0">Supervisión @(module == GraphicModule.Faldon ? "FALDÓN" : "CARTÓN")</span>
+                            <span class="ws-onair-pill @(state.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
+                                @(state.IsOnAir ? "● EN AIRE" : "○ FUERA DE AIRE")
+                            </span>
+                        </div>
+                        <div class="row g-2 small mb-3">
+                            <div class="col-6">
+                                <span class="text-muted">Escena activa:</span>
+                                <div class="fw-bold">@(string.IsNullOrWhiteSpace(state.ActiveScene) ? "-" : state.ActiveScene)</div>
+                            </div>
+                            <div class="col-6">
+                                <span class="text-muted">Bloqueo (Lock):</span>
+                                <div class="fw-bold">
+                                    @(lockInfo.IsLocked ? lockInfo.Owner : "Libre")
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <span class="text-muted">Último operador:</span>
+                                <div>@(string.IsNullOrWhiteSpace(state.LastOperatorId) ? "-" : state.LastOperatorId)</div>
+                            </div>
+                            <div class="col-6">
+                                <span class="text-muted">Sede / Vídeos:</span>
+                                <div>
+                                    Sede: @(state.IsSedeExpanding ? "Sí" : "No") · Vídeos: @(state.ExpandedVideos.Count == 0 ? "-" : string.Join(", ", state.ExpandedVideos))
+                                </div>
+                            </div>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button type="button" class="btn btn-sm btn-outline-warning" @onclick="() => ForceUnlockModule(module)" disabled="@(!lockInfo.IsLocked)">
+                                Forzar Desbloqueo
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => ResetModuleAsync(module)">
+                                Reset Módulo
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else if (activeTab == ControlTab.TechnicalConfig)
+    {
+        <div class="row g-3">
+            <div class="col-12 col-xl-6">
+                <div class="ws-panel h-100">
+                    <div class="ws-control-group-title">Destinos Gráficos (IPF / PRIME / IPF2)</div>
+                    <div class="form-check form-switch mb-2">
+                        <input id="sendIpf2WithIpf" class="form-check-input" type="checkbox" @bind="graphics.SendToIpf2WithIpf" />
+                        <label for="sendIpf2WithIpf" class="form-check-label small">Duplicar envíos IPF hacia IPF2</label>
+                    </div>
+
+                    <div class="border rounded p-2 mb-2">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <strong class="small">IPF Principal</strong>
+                            <div class="form-check form-switch mb-0">
+                                <input id="ipfEnabled" class="form-check-input" type="checkbox" @bind="graphics.Ipf.Enabled" />
+                                <label class="form-check-label small" for="ipfEnabled">Activo</label>
+                            </div>
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label form-label-sm mb-1">Host</label>
+                                <input class="form-control form-control-sm" @bind="graphics.Ipf.Host" />
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label form-label-sm mb-1">Puerto</label>
+                                <input class="form-control form-control-sm" type="number" min="1" @bind="graphics.Ipf.Port" />
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label form-label-sm mb-1">BD</label>
+                                <input class="form-control form-control-sm" @bind="graphics.Ipf.Bd" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="border rounded p-2 mb-2">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <strong class="small">PRIME</strong>
+                            <div class="form-check form-switch mb-0">
+                                <input id="primeEnabled" class="form-check-input" type="checkbox" @bind="graphics.Prime.Enabled" />
+                                <label class="form-check-label small" for="primeEnabled">Activo</label>
+                            </div>
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label form-label-sm mb-1">Host</label>
+                                <input class="form-control form-control-sm" @bind="graphics.Prime.Host" />
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label form-label-sm mb-1">Puerto</label>
+                                <input class="form-control form-control-sm" type="number" min="1" @bind="graphics.Prime.Port" />
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label form-label-sm mb-1">BD</label>
+                                <input class="form-control form-control-sm" @bind="graphics.Prime.Bd" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="border rounded p-2 mb-2">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <strong class="small">IPF2 (Secundario)</strong>
+                            <div class="form-check form-switch mb-0">
+                                <input id="ipf2Enabled" class="form-check-input" type="checkbox" @bind="graphics.Ipf2.Enabled" />
+                                <label class="form-check-label small" for="ipf2Enabled">Activo</label>
+                            </div>
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label form-label-sm mb-1">Host</label>
+                                <input class="form-control form-control-sm" @bind="graphics.Ipf2.Host" />
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label form-label-sm mb-1">Puerto</label>
+                                <input class="form-control form-control-sm" type="number" min="1" @bind="graphics.Ipf2.Port" />
+                            </div>
+                            <div class="col-3">
+                                <label class="form-label form-label-sm mb-1">BD</label>
+                                <input class="form-control form-control-sm" @bind="graphics.Ipf2.Bd" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="d-flex gap-2 mt-2">
+                        <button type="button" class="btn btn-sm btn-primary" @onclick="SaveConfigAsync" disabled="@saving">
+                            @(saving ? "Guardando..." : "Guardar Configuración")
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CheckConnectivityAsync" disabled="@checkingConnectivity">
+                            @(checkingConnectivity ? "Comprobando..." : "Comprobar Conexiones")
+                        </button>
+                    </div>
+
+                    @if (connectivityStatuses.Count > 0)
+                    {
+                        <div class="mt-2 d-flex flex-wrap gap-2">
+                            @foreach (var status in connectivityStatuses)
+                            {
+                                <span class="badge @(!status.Enabled ? "bg-secondary" : status.Reachable ? "bg-success" : "bg-danger")">
+                                    @status.Name (@status.Host:@status.Port): @status.Message
+                                </span>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="col-12 col-xl-6">
+                <div class="ws-panel h-100">
+                    <div class="ws-control-group-title">Horas Operativas</div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label form-label-sm mb-1">Avance 1</label>
+                            <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance1" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label form-label-sm mb-1">Avance 1 Histórico</label>
+                            <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance1Historico" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label form-label-sm mb-1">Avance 2</label>
+                            <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance2" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label form-label-sm mb-1">Avance 2 Histórico</label>
+                            <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance2Historico" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label form-label-sm mb-1">Avance 3</label>
+                            <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance3" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label form-label-sm mb-1">Avance 3 Histórico</label>
+                            <input class="form-control form-control-sm" @bind="operational.Hours.HoraAvance3Historico" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label form-label-sm mb-1">Participación</label>
+                            <input class="form-control form-control-sm" @bind="operational.Hours.HoraParticipacion" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label form-label-sm mb-1">Participación Histórica</label>
+                            <input class="form-control form-control-sm" @bind="operational.Hours.HoraParticipacionHistorico" />
+                        </div>
+                    </div>
+
+                    <div class="ws-control-group-title">Fuentes de Vídeo (Slots 1-6)</div>
+                    <table class="table table-sm table-striped align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Slot</th>
+                                <th>Modo</th>
+                                <th>Ruta / URL</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var source in operational.VideoSources.OrderBy(x => x.Slot))
+                            {
+                                <tr>
+                                    <td>@source.Slot</td>
+                                    <td>
+                                        <div class="form-check form-switch mb-0">
+                                            <input id="@($"videoLive{source.Slot}")" class="form-check-input" type="checkbox" @bind="source.IsLive" />
+                                            <label class="form-check-label small" for="@($"videoLive{source.Slot}")">
+                                                @(source.IsLive ? "Directo" : "Pregrabado")
+                                            </label>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <input class="form-control form-control-sm" @bind="source.Path" placeholder="Ruta local o URL" />
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+    else if (activeTab == ControlTab.Diagnostics)
+    {
+        <div class="ws-panel">
+            <div class="row g-2 mb-2 align-items-end">
+                <div class="col-6 col-md-3">
+                    <label class="form-label form-label-sm mb-1">Filtrar por módulo</label>
+                    <select class="form-select form-select-sm" @bind="selectedModuleFilter">
+                        <option value="">Todos</option>
+                        <option value="@GraphicModule.Faldon">Faldón</option>
+                        <option value="@GraphicModule.Carton">Cartón</option>
+                    </select>
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label form-label-sm mb-1">Filtrar por destino</label>
+                    <input class="form-control form-control-sm" placeholder="IPF, Prime..." @bind="targetFilter" />
+                </div>
+                <div class="col-12 col-md-6 d-flex gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-primary" @onclick="RefreshDiagnostics">Refrescar</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="ClearDiagnostics">Limpiar Consola</button>
+                </div>
+            </div>
+
+            <div class="table-responsive" style="max-height: calc(100vh - 220px); overflow-y: auto;">
+                <table class="table table-sm table-striped align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Hora (UTC)</th>
+                            <th>Módulo</th>
+                            <th>Destino</th>
+                            <th>Endpoint</th>
+                            <th>Estado</th>
+                            <th>Señal TCP</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in FilteredEntries)
+                        {
+                            <tr>
+                                <td class="text-nowrap small">@entry.TimestampUtc.ToString("HH:mm:ss.fff")</td>
+                                <td><span class="badge bg-info text-dark">@(entry.Module?.ToString() ?? "-")</span></td>
+                                <td>@entry.EndpointName</td>
+                                <td class="small text-muted">@entry.Host:@entry.Port</td>
+                                <td>
+                                    <span class="badge @(entry.Delivered ? "bg-success" : "bg-danger")">
+                                        @(entry.Delivered ? "OK" : "ERROR")
+                                    </span>
+                                </td>
+                                <td>
+                                    <code class="small">@entry.Payload</code>
+                                    @if (!entry.Delivered && !string.IsNullOrWhiteSpace(entry.StatusMessage))
+                                    {
+                                        <div class="text-danger small">@entry.StatusMessage</div>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private enum ControlTab
+    {
+        GlobalLive,
+        TechnicalConfig,
+        Diagnostics
+    }
+
+    private static readonly GraphicModule[] SupervisedModules = [GraphicModule.Faldon, GraphicModule.Carton];
+
+    private ControlTab activeTab = ControlTab.GlobalLive;
+    private GlobalOperationalSettings globalSnapshot = new();
+    private GraphicsEndpointsOptions graphics = new();
+    private OperationalOptions operational = new();
+    private ModuleOperationalState faldonState = new() { Module = GraphicModule.Faldon };
+    private ModuleOperationalState cartonState = new() { Module = GraphicModule.Carton };
+    private IReadOnlyList<ModuleLockInfo> lockStates = [];
+    private IReadOnlyList<SignalDiagnosticEntry> entries = [];
+    private IReadOnlyList<EndpointConnectivityStatus> connectivityStatuses = [];
+
+    private string currentOperatorId = "op_admin";
+    private string feedbackMessage = string.Empty;
+    private bool feedbackIsError;
+    private bool saving;
+    private bool checkingConnectivity;
+    private bool checkingDbChanges;
+    private string selectedModuleFilter = string.Empty;
+    private string targetFilter = string.Empty;
+
+    private IEnumerable<SignalDiagnosticEntry> FilteredEntries => entries
+        .Where(e => string.IsNullOrWhiteSpace(selectedModuleFilter) || string.Equals(e.Module?.ToString(), selectedModuleFilter, StringComparison.OrdinalIgnoreCase))
+        .Where(e => string.IsNullOrWhiteSpace(targetFilter) || e.EndpointName.Contains(targetFilter, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var userName = authState.User.Identity?.Name;
+        if (!string.IsNullOrWhiteSpace(userName))
+        {
+            currentOperatorId = userName;
+        }
+
+        globalSnapshot = GlobalSettings.GetSettings();
+        LoadTechnicalConfig();
+        RefreshStatesAndDiagnostics();
+
+        GlobalSettings.OnSettingsChanged += HandleGlobalSettingsChanged;
+        StateService.OnStateChanged += HandleModuleStateChanged;
+        ModuleLockService.LocksChanged += HandleLocksChanged;
+        DiagnosticsService.EntriesChanged += HandleDiagnosticsChanged;
+    }
+
+    private void LoadTechnicalConfig()
+    {
+        var snapshot = ConfigService.GetSnapshot();
+        graphics = snapshot.GraphicsEndpoints;
+        operational = snapshot.Operational;
+    }
+
+    private void RefreshStatesAndDiagnostics()
+    {
+        faldonState = StateService.GetState(GraphicModule.Faldon);
+        cartonState = StateService.GetState(GraphicModule.Carton);
+        lockStates = ModuleLockService.GetStates();
+        entries = DiagnosticsService.GetRecentEntries(maxCount: 100);
+    }
+
+    private ModuleLockInfo GetModuleLockInfo(GraphicModule module) =>
+        lockStates.FirstOrDefault(x => x.Module == module) ?? new ModuleLockInfo { Module = module };
+
+    private static string GetConnectionLabel(int connectionType) => connectionType switch
+    {
+        0 => "Principal",
+        1 => "Reserva",
+        2 => "Local",
+        _ => $"Conn {connectionType}"
+    };
+
+    private void OnElectionSlotChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var slot))
+        {
+            GlobalSettings.UpdateSettings(s => s with { ElectionSlot = slot });
+        }
+    }
+
+    private void OnConnectionTypeChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var conn))
+        {
+            GlobalSettings.UpdateSettings(s => s with { ConnectionType = conn });
+        }
+    }
+
+    private void OnTargetChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<GraphicsTarget>(e.Value?.ToString(), out var target))
+        {
+            GlobalSettings.UpdateSettings(s => s with { Target = target });
+        }
+    }
+
+    private void SetOficiales(bool oficiales)
+    {
+        GlobalSettings.UpdateSettings(s => s with { Oficiales = oficiales });
+    }
+
+    private void OnAvanceChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var avance))
+        {
+            GlobalSettings.UpdateSettings(s => s with { Avance = avance });
+        }
+    }
+
+    private void OnExportNameChanged(ChangeEventArgs e)
+    {
+        var name = e.Value?.ToString();
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            GlobalSettings.UpdateSettings(s => s with { ExportName = name.Trim() });
+        }
+    }
+
+    private void OnIncludeZeroSeatsChanged(ChangeEventArgs e)
+    {
+        var enabled = e.Value is bool b && b;
+        GlobalSettings.UpdateSettings(s => s with { IncludeZeroSeats = enabled });
+    }
+
+    private void OnAutoRefreshEnabledChanged(ChangeEventArgs e)
+    {
+        var enabled = e.Value is bool b && b;
+        GlobalSettings.UpdateSettings(s => s with { AutoRefreshEnabled = enabled });
+    }
+
+    private void OnAutoRefreshIntervalChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var interval))
+        {
+            GlobalSettings.UpdateSettings(s => s with { AutoRefreshIntervalSeconds = Math.Clamp(interval, 2, 60) });
+        }
+    }
+
+    private async Task CheckDatabaseChangesNowAsync()
+    {
+        checkingDbChanges = true;
+        try
+        {
+            var count = await ChangeListenerService.CheckAndDispatchUpdatesOnceAsync();
+            globalSnapshot = GlobalSettings.GetSettings();
+            feedbackMessage = count > 0
+                ? $"Actualización automática disparada ({count} señal(es))."
+                : globalSnapshot.LastAutoRefreshStatus;
+            feedbackIsError = false;
+        }
+        catch (Exception ex)
+        {
+            feedbackMessage = $"Error al comprobar BD: {ex.Message}";
+            feedbackIsError = true;
+        }
+        finally
+        {
+            checkingDbChanges = false;
+        }
+    }
+
+    private void ForceUnlockModule(GraphicModule module)
+    {
+        ModuleLockService.ForceRelease(module);
+        feedbackMessage = $"Bloqueo de {module} liberado por administración.";
+        feedbackIsError = false;
+        RefreshStatesAndDiagnostics();
+    }
+
+    private async Task ResetModuleAsync(GraphicModule module)
+    {
+        ModuleLockService.ForceRelease(module);
+        ModuleLockService.TryAcquire(module, currentOperatorId);
+        try
+        {
+            var activeState = StateService.GetState(module);
+            var query = activeState.ActiveQuery ?? new SnapshotQuery
+            {
+                ElectionSlot = globalSnapshot.ElectionSlot,
+                ConnectionType = globalSnapshot.ConnectionType,
+                Kind = SnapshotQueryKind.Circunscripcion,
+                CircunscripcionCodigo = "9900000",
+                Avance = globalSnapshot.Avance,
+                IncludeZeroSeats = globalSnapshot.IncludeZeroSeats
+            };
+
+            var result = await OperationService.ExecuteAsync(new OperationRequest
+            {
+                OperatorId = currentOperatorId,
+                Module = module,
+                Action = OperationActionType.Reset,
+                Command = GraphicCommand.None,
+                Scene = string.IsNullOrWhiteSpace(activeState.ActiveScene) ? "ESCRUTINIO" : activeState.ActiveScene,
+                Oficiales = globalSnapshot.Oficiales,
+                Target = globalSnapshot.Target,
+                Query = query,
+                ExportName = globalSnapshot.ExportName
+            });
+
+            feedbackMessage = result.Message;
+            feedbackIsError = !result.Success;
+        }
+        finally
+        {
+            ModuleLockService.Release(module, currentOperatorId);
+            RefreshStatesAndDiagnostics();
+        }
+    }
+
+    private async Task SaveConfigAsync()
+    {
+        saving = true;
+        feedbackMessage = string.Empty;
+        feedbackIsError = false;
+        try
+        {
+            var result = await ConfigService.SaveAsync(new OperationalConfigurationSnapshot
+            {
+                GraphicsEndpoints = graphics,
+                Operational = operational
+            });
+
+            feedbackMessage = result.Message;
+            feedbackIsError = !result.Success;
+            LoadTechnicalConfig();
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task CheckConnectivityAsync()
+    {
+        checkingConnectivity = true;
+        feedbackMessage = string.Empty;
+        feedbackIsError = false;
+        try
+        {
+            connectivityStatuses = await ConfigService.CheckConnectivityAsync();
+            feedbackMessage = "Comprobación de conectividad completada.";
+        }
+        catch (Exception ex)
+        {
+            feedbackMessage = $"Error comprobando conexiones: {ex.Message}";
+            feedbackIsError = true;
+        }
+        finally
+        {
+            checkingConnectivity = false;
+        }
+    }
+
+    private void RefreshDiagnostics()
+    {
+        entries = DiagnosticsService.GetRecentEntries(maxCount: 100);
+    }
+
+    private void ClearDiagnostics()
+    {
+        DiagnosticsService.Clear();
+        RefreshDiagnostics();
+    }
+
+    private void HandleGlobalSettingsChanged(GlobalOperationalSettings settings)
+    {
+        _ = InvokeAsync(() =>
+        {
+            globalSnapshot = settings;
+            StateHasChanged();
+        });
+    }
+
+    private void HandleModuleStateChanged(GraphicModule module, ModuleOperationalState state)
+    {
+        _ = InvokeAsync(() =>
+        {
+            RefreshStatesAndDiagnostics();
+            StateHasChanged();
+        });
+    }
+
+    private void HandleLocksChanged()
+    {
+        _ = InvokeAsync(() =>
+        {
+            lockStates = ModuleLockService.GetStates();
+            StateHasChanged();
+        });
+    }
+
+    private void HandleDiagnosticsChanged()
+    {
+        _ = InvokeAsync(() =>
+        {
+            entries = DiagnosticsService.GetRecentEntries(maxCount: 100);
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        GlobalSettings.OnSettingsChanged -= HandleGlobalSettingsChanged;
+        StateService.OnStateChanged -= HandleModuleStateChanged;
+        ModuleLockService.LocksChanged -= HandleLocksChanged;
+        DiagnosticsService.EntriesChanged -= HandleDiagnosticsChanged;
+    }
+}

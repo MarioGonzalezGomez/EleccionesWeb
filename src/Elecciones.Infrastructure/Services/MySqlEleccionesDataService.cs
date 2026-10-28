@@ -1,4 +1,4 @@
-﻿using Elecciones.Application.Abstractions;
+using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
 using Elecciones.Infrastructure.Data;
 using Elecciones.Infrastructure.Entities;
@@ -13,13 +13,16 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
 {
     private readonly DatabaseOptions _databaseOptions;
     private readonly ILogger<MySqlEleccionesDataService> _logger;
+    private readonly IOptionsMonitor<OperationalOptions>? _operationalMonitor;
 
     public MySqlEleccionesDataService(
         IOptions<DatabaseOptions> databaseOptions,
-        ILogger<MySqlEleccionesDataService> logger)
+        ILogger<MySqlEleccionesDataService> logger,
+        IOptionsMonitor<OperationalOptions>? operationalMonitor = null)
     {
         _databaseOptions = databaseOptions.Value;
         _logger = logger;
+        _operationalMonitor = operationalMonitor;
     }
 
     public async Task<IReadOnlyList<CircunscripcionSummary>> GetCircunscripcionesAsync(int electionSlot = 1, int connectionType = 0, CancellationToken cancellationToken = default)
@@ -115,6 +118,8 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             avance = query.Avance.Value;
         }
         var participacion = await ResolveParticipacionDataAsync(db, contextCirc, avance, query.ElectionSlot, cancellationToken);
+        var (todasLasProvincias, provinciasAutonomia) = await ResolveMapaProvinciasAsync(db, contextCirc, oficiales, cancellationToken);
+        var operational = _operationalMonitor?.CurrentValue ?? new OperationalOptions();
 
         return new BrainStormSnapshot
         {
@@ -125,6 +130,20 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             Participacion = participacion.Actual,
             ParticipacionHistorica = participacion.Historica,
             ParticipacionMedia = participacion.Media,
+            Avance1 = contextCirc.Avance1,
+            Avance2 = contextCirc.Avance2,
+            Avance3 = contextCirc.Avance3,
+            Avance1Historico = contextCirc.Avance1Hist,
+            Avance2Historico = contextCirc.Avance2Hist,
+            Avance3Historico = contextCirc.Avance3Hist,
+            HoraAvance1 = operational.Hours.HoraAvance1,
+            HoraAvance2 = operational.Hours.HoraAvance2,
+            HoraAvance3 = operational.Hours.HoraAvance3,
+            HoraParticipacion = operational.Hours.HoraParticipacion,
+            HoraAvance1Historico = operational.Hours.HoraAvance1Historico,
+            HoraAvance2Historico = operational.Hours.HoraAvance2Historico,
+            HoraAvance3Historico = operational.Hours.HoraAvance3Historico,
+            HoraParticipacionHistorico = operational.Hours.HoraParticipacionHistorico,
             EscaniosTotales = contextCirc.Escanios,
             MayoriaAbsoluta = contextCirc.Escanios <= 0 ? 0 : (contextCirc.Escanios / 2) + 1,
             VotantesTotales = contextCirc.Votantes,
@@ -134,8 +153,82 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             NombreSondeo = query.MedioCodigo ?? string.Empty,
             GeneratedAtUtc = DateTime.UtcNow,
             Partidos = partidos,
-            CsvTemplatePartidos = csvTemplatePartidos
+            CsvTemplatePartidos = csvTemplatePartidos,
+            ProvinciasAutonomia = provinciasAutonomia,
+            TodasLasProvinciasMapa = todasLasProvincias,
+            VideoSlots = operational.VideoSources
+                .Select(v => new VideoSlotSnapshot(v.Slot, v.IsLive, v.Path ?? string.Empty))
+                .ToList()
         };
+    }
+
+    private static async Task<(IReadOnlyList<string> TodasLasProvincias, IReadOnlyList<ProvinciaMapaSnapshot> ProvinciasAutonomia)> ResolveMapaProvinciasAsync(
+        EleccionesDbContext db,
+        CircunscripcionEntity contextCirc,
+        bool oficiales,
+        CancellationToken cancellationToken)
+    {
+        var allProvincialCircs = await db.Circunscripciones
+            .AsNoTracking()
+            .Where(x => x.Codigo.EndsWith("000") && !x.Codigo.EndsWith("00000") && !string.IsNullOrWhiteSpace(x.Nombre))
+            .OrderBy(x => x.Codigo)
+            .ToListAsync(cancellationToken);
+
+        var todasLasProvincias = allProvincialCircs
+            .Select(x => x.Nombre.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        List<CircunscripcionEntity> targetProvincias;
+        if (contextCirc.Codigo.EndsWith("00000", StringComparison.Ordinal))
+        {
+            if (contextCirc.Codigo.StartsWith("99", StringComparison.Ordinal))
+            {
+                targetProvincias = allProvincialCircs;
+            }
+            else
+            {
+                var prefix = !string.IsNullOrWhiteSpace(contextCirc.Comunidad)
+                    ? contextCirc.Comunidad.Trim()
+                    : contextCirc.Codigo[..Math.Min(2, contextCirc.Codigo.Length)];
+                targetProvincias = allProvincialCircs
+                    .Where(x => string.Equals(x.Comunidad, prefix, StringComparison.OrdinalIgnoreCase)
+                        || x.Codigo.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+        }
+        else
+        {
+            targetProvincias = [contextCirc];
+        }
+
+        if (targetProvincias.Count == 0)
+        {
+            return (todasLasProvincias, []);
+        }
+
+        var targetCodes = targetProvincias.Select(x => x.Codigo).ToList();
+        var cpsProvincias = await db.CircunscripcionPartidos
+            .AsNoTracking()
+            .Include(x => x.Partido)
+            .Where(x => targetCodes.Contains(x.CodCircunscripcion))
+            .ToListAsync(cancellationToken);
+
+        var winnerByCirc = cpsProvincias
+            .GroupBy(x => x.CodCircunscripcion, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => OrderCpList(g.ToList(), oficiales).FirstOrDefault()?.Partido?.Siglas ?? string.Empty,
+                StringComparer.OrdinalIgnoreCase);
+
+        var provinciasAutonomia = targetProvincias
+            .Select(p => new ProvinciaMapaSnapshot(
+                p.Codigo,
+                p.Nombre.Trim(),
+                winnerByCirc.GetValueOrDefault(p.Codigo, string.Empty)))
+            .ToList();
+
+        return (todasLasProvincias, provinciasAutonomia);
     }
 
     private static async Task<List<CircunscripcionPartidoEntity>> GetCircunscripcionAsync(

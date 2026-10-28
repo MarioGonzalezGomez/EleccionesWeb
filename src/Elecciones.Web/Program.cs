@@ -1,4 +1,5 @@
-﻿using Elecciones.Application.Abstractions;
+using Elecciones.Application.Abstractions;
+using Elecciones.Application.Models;
 using Elecciones.Application.Services;
 using Elecciones.GraphicsGateway.Options;
 using Elecciones.GraphicsGateway.Services;
@@ -75,6 +76,23 @@ builder.Services.AddSingleton<IModuleLockService, ModuleLockService>();
 builder.Services.AddSingleton<ConfiguredOperatorAuthorizationService>();
 builder.Services.AddSingleton<IOperatorAuthorizationService>(sp => sp.GetRequiredService<ConfiguredOperatorAuthorizationService>());
 builder.Services.AddSingleton<IOperatorAuthenticationService>(sp => sp.GetRequiredService<ConfiguredOperatorAuthorizationService>());
+builder.Services.AddSingleton<ISignalDiagnosticsService, InMemorySignalDiagnosticsService>();
+builder.Services.AddSingleton<IOperationStateService, OperationStateService>();
+builder.Services.AddSingleton<IGlobalOperationalSettingsService>(_ =>
+    new GlobalOperationalSettingsService(new GlobalOperationalSettings
+    {
+        ElectionSlot = Math.Clamp(dbOptions.DefaultElectionSlot, 1, 3),
+        ConnectionType = 0,
+        Target = GraphicsTarget.Ipf,
+        Oficiales = false,
+        Avance = 0,
+        ExportName = "BrainStorm",
+        IncludeZeroSeats = false,
+        AutoRefreshEnabled = false,
+        AutoRefreshIntervalSeconds = 5
+    }));
+builder.Services.AddSingleton<DatabaseChangeListenerService>();
+builder.Services.AddHostedService<DatabaseChangeListenerHostedService>();
 builder.Services.AddSingleton<ISignalComposer, DefaultSignalComposer>();
 builder.Services.AddSingleton<IBrainStormCsvWriter, FileBrainStormCsvWriter>();
 builder.Services.AddSingleton<IGraphicsGateway, TcpGraphicsGateway>();
@@ -92,6 +110,27 @@ if (!app.Environment.IsDevelopment())
 app.UseStaticFiles();
 app.UseAntiforgery();
 app.UseAuthentication();
+
+app.Use(async (context, next) =>
+{
+    var authConfig = context.RequestServices.GetRequiredService<ConfiguredOperatorAuthorizationService>();
+    if (authConfig.AutoLoginByWorkspace && context.User.Identity?.IsAuthenticated != true)
+    {
+        var workspace = WorkspaceResolver.Resolve(context.Request.Host.Host, context.Request.Path.Value);
+        var operatorId = WorkspaceResolver.GetDefaultOperatorId(workspace);
+        var role = WorkspaceResolver.GetDefaultRole(workspace);
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.Name, operatorId),
+            new(ClaimTypes.Role, role)
+        };
+        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+        context.User = new ClaimsPrincipal(identity);
+    }
+
+    await next();
+});
+
 app.UseAuthorization();
 
 app.MapPost("/auth/login", async (
@@ -122,7 +161,7 @@ app.MapPost("/auth/login", async (
     await httpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
 
     var safeReturnUrl = string.IsNullOrWhiteSpace(returnUrl) || !Uri.IsWellFormedUriString(returnUrl, UriKind.Relative)
-        ? "/operacion"
+        ? "/"
         : returnUrl;
 
     return Results.Redirect(safeReturnUrl);

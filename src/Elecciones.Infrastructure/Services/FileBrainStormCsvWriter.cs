@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -35,9 +35,10 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
     public async Task<string> WriteAsync(
         BrainStormSnapshot snapshot,
         string exportName,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        GraphicModule? module = null)
     {
-        var folderPath = ResolveCsvFolder(_options.CsvFolder);
+        var folderPath = ResolveCsvFolder(_options.ResolveCsvFolderForModule(module));
         Directory.CreateDirectory(folderPath);
 
         var safeName = string.IsNullOrWhiteSpace(exportName) ? "BrainStorm" : exportName.Trim();
@@ -75,7 +76,8 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
     public async Task<string?> WriteSedesAsync(
         BrainStormSnapshot snapshot,
         string partyToken,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        GraphicModule? module = null)
     {
         if (snapshot.Partidos.Count == 0 || string.IsNullOrWhiteSpace(partyToken))
         {
@@ -88,7 +90,7 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
             return null;
         }
 
-        var folderPath = ResolveCsvFolder(_options.CsvFolder);
+        var folderPath = ResolveCsvFolder(_options.ResolveCsvFolderForModule(module));
         Directory.CreateDirectory(folderPath);
         var filePath = Path.Combine(folderPath, "Sedes.csv");
 
@@ -130,14 +132,15 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
 
     public async Task<string?> WriteRecuentosJsonAsync(
         BrainStormSnapshot snapshot,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        GraphicModule? module = null)
     {
         if (!_options.EnableRecuentosJson)
         {
             return null;
         }
 
-        var folderPath = ResolveCsvFolder(_options.JsonFolder);
+        var folderPath = ResolveCsvFolder(_options.ResolveJsonFolderForModule(module));
         Directory.CreateDirectory(folderPath);
 
         var safeName = string.IsNullOrWhiteSpace(_options.RecuentosJsonFileName)

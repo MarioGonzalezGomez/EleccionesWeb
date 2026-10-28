@@ -1,0 +1,28 @@
+@page "/"
+@using Elecciones.Application.Models
+@using Elecciones.Application.Services
+@inject NavigationManager Navigation
+
+@switch (resolvedWorkspace)
+{
+    case WorkspaceKind.Faldon:
+        <FaldonWorkspace />
+        break;
+    case WorkspaceKind.Carton:
+        <CartonWorkspace />
+        break;
+    default:
+        <ControlGeneralWorkspace />
+        break;
+}
+
+@code {
+    private WorkspaceKind resolvedWorkspace = WorkspaceKind.ControlGeneral;
+
+    protected override void OnInitialized()
+    {
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        resolvedWorkspace = WorkspaceResolver.Resolve(uri.Host, uri.AbsolutePath);
+    }
+}
+

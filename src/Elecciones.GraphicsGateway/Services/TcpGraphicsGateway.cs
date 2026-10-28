@@ -1,4 +1,4 @@
-﻿using System.Net.Sockets;
+using System.Net.Sockets;
 using System.Text;
 using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
@@ -12,31 +12,47 @@ public sealed class TcpGraphicsGateway : IGraphicsGateway
 {
     private readonly IOptionsMonitor<GraphicsEndpointsOptions> _optionsMonitor;
     private readonly ILogger<TcpGraphicsGateway> _logger;
+    private readonly ISignalDiagnosticsService? _diagnostics;
 
-    public TcpGraphicsGateway(IOptionsMonitor<GraphicsEndpointsOptions> optionsMonitor, ILogger<TcpGraphicsGateway> logger)
+    public TcpGraphicsGateway(
+        IOptionsMonitor<GraphicsEndpointsOptions> optionsMonitor,
+        ILogger<TcpGraphicsGateway> logger,
+        ISignalDiagnosticsService? diagnostics = null)
     {
         _optionsMonitor = optionsMonitor;
         _logger = logger;
+        _diagnostics = diagnostics;
     }
 
     public async Task<IReadOnlyList<string>> SendAsync(
         GraphicsTarget target,
         string message,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        GraphicModule? module = null)
     {
         var successfulTargets = new List<string>();
 
-        foreach (var endpoint in ResolveTargets(target))
+        foreach (var endpoint in ResolveTargets(target, module))
         {
+            var concreteMessage = ResolveMessageForEndpoint(message, endpoint.Bd);
+
             if (!endpoint.Enabled)
             {
+                _diagnostics?.Record(new SignalDiagnosticEntry(
+                    DateTime.UtcNow,
+                    module,
+                    endpoint.Name,
+                    endpoint.Host,
+                    endpoint.Port,
+                    endpoint.Bd,
+                    Delivered: false,
+                    StatusMessage: "Desactivado (Dry-Run)",
+                    Payload: concreteMessage));
                 continue;
             }
 
             try
             {
-                var concreteMessage = ResolveMessageForEndpoint(message, endpoint.Bd);
-
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeoutCts.CancelAfter(TimeSpan.FromSeconds(2));
 
@@ -47,6 +63,17 @@ public sealed class TcpGraphicsGateway : IGraphicsGateway
                 await client.GetStream().WriteAsync(payload, timeoutCts.Token);
 
                 successfulTargets.Add(endpoint.Name);
+
+                _diagnostics?.Record(new SignalDiagnosticEntry(
+                    DateTime.UtcNow,
+                    module,
+                    endpoint.Name,
+                    endpoint.Host,
+                    endpoint.Port,
+                    endpoint.Bd,
+                    Delivered: true,
+                    StatusMessage: "Enviado OK",
+                    Payload: concreteMessage));
             }
             catch (Exception ex)
             {
@@ -56,6 +83,17 @@ public sealed class TcpGraphicsGateway : IGraphicsGateway
                     endpoint.Name,
                     endpoint.Host,
                     endpoint.Port);
+
+                _diagnostics?.Record(new SignalDiagnosticEntry(
+                    DateTime.UtcNow,
+                    module,
+                    endpoint.Name,
+                    endpoint.Host,
+                    endpoint.Port,
+                    endpoint.Bd,
+                    Delivered: false,
+                    StatusMessage: $"Error TCP: {ex.Message}",
+                    Payload: concreteMessage));
             }
         }
 
@@ -68,28 +106,29 @@ public sealed class TcpGraphicsGateway : IGraphicsGateway
         return rawMessage.Replace("{BD}", selectedBd, StringComparison.OrdinalIgnoreCase);
     }
 
-    private IEnumerable<Endpoint> ResolveTargets(GraphicsTarget target)
+    private IEnumerable<Endpoint> ResolveTargets(GraphicsTarget target, GraphicModule? module)
     {
         var options = _optionsMonitor.CurrentValue;
 
         return target switch
         {
-            GraphicsTarget.Ipf => BuildIpfTargets(options),
+            GraphicsTarget.Ipf => BuildIpfTargets(options, module),
             GraphicsTarget.Prime => [new Endpoint("PRIME", options.Prime.Enabled, options.Prime.Host, options.Prime.Port, options.Prime.Bd)],
             GraphicsTarget.Both =>
             [
-                .. BuildIpfTargets(options),
+                .. BuildIpfTargets(options, module),
                 new Endpoint("PRIME", options.Prime.Enabled, options.Prime.Host, options.Prime.Port, options.Prime.Bd)
             ],
             _ => []
         };
     }
 
-    private static IEnumerable<Endpoint> BuildIpfTargets(GraphicsEndpointsOptions options)
+    private static IEnumerable<Endpoint> BuildIpfTargets(GraphicsEndpointsOptions options, GraphicModule? module)
     {
+        var resolvedIpf = options.ResolveIpfForModule(module);
         var targets = new List<Endpoint>
         {
-            new("IPF", options.Ipf.Enabled, options.Ipf.Host, options.Ipf.Port, options.Ipf.Bd)
+            new("IPF", resolvedIpf.Enabled, resolvedIpf.Host, resolvedIpf.Port, resolvedIpf.Bd)
         };
 
         if (options.SendToIpf2WithIpf)

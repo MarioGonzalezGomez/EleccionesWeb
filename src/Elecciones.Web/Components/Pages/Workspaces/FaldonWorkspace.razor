@@ -1,0 +1,712 @@
+@page "/faldon"
+@page "/operacion/faldon"
+@page "/operacion/botonera"
+@page "/operacion/pactos"
+@attribute [Authorize]
+@implements IDisposable
+@using Elecciones.Application.Abstractions
+@using Elecciones.Application.Models
+@using Elecciones.Application.Services
+@using Elecciones.Infrastructure.Options
+@using EleccionesWeb.Services
+@inject IModuleLockService ModuleLockService
+@inject IOperationService OperationService
+@inject IEleccionesDataService DataService
+@inject IOperatorAuthorizationService AuthorizationService
+@inject ConfiguredOperatorAuthorizationService AuthConfig
+@inject IGlobalOperationalSettingsService GlobalSettingsService
+@inject IOperationStateService StateService
+@inject IConfiguration Configuration
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Faldón</PageTitle>
+
+<header class="ws-topbar">
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+        <span class="ws-badge-title">Faldón</span>
+        <span class="ws-onair-pill @(moduleState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
+            @(moduleState.IsOnAir
+                ? $"● EN AIRE: {(string.IsNullOrWhiteSpace(moduleState.ActiveScene) ? ActiveSceneName : moduleState.ActiveScene)}"
+                : "○ FUERA DE AIRE")
+        </span>
+        <span class="badge bg-secondary">
+            @(globalSettings.Oficiales ? "OFICIALES" : "SONDEO") · Elección @globalSettings.ElectionSlot
+        </span>
+        @if (!IsOwner)
+        {
+            <button class="btn btn-xs btn-warning py-0 px-2 small fw-semibold" type="button" @onclick="ClaimModuleLock">
+                Tomar control
+            </button>
+        }
+    </div>
+
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+        <div class="d-flex align-items-center gap-1">
+            <label class="small text-light opacity-75 mb-0">Circunscripción:</label>
+            <select class="form-select form-select-sm" style="min-width: 210px;" value="@selectedCircunscripcionCodigo" @onchange="OnCircunscripcionChangedAsync">
+                @foreach (var circ in circunscripciones)
+                {
+                    <option value="@circ.Codigo">@circ.Codigo - @circ.Nombre</option>
+                }
+            </select>
+        </div>
+
+        @if (!globalSettings.Oficiales)
+        {
+            <div class="d-flex align-items-center gap-1">
+                <label class="small text-light opacity-75 mb-0">Sondeo:</label>
+                <select class="form-select form-select-sm" style="min-width: 120px;" value="@selectedMedioCodigo" @onchange="OnMedioChangedAsync">
+                    @foreach (var medio in medios)
+                    {
+                        <option value="@medio.Codigo">@medio.Descripcion</option>
+                    }
+                </select>
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(feedbackMessage))
+        {
+            <span class="badge @(feedbackIsError ? "bg-danger" : "bg-success") py-1 px-2">
+                @feedbackMessage
+            </span>
+        }
+    </div>
+</header>
+
+<div class="ws-body">
+    <section class="ws-panel">
+        <div class="ws-tabs">
+            @foreach (var mode in Enum.GetValues<FaldonMode>())
+            {
+                <button type="button"
+                        class="ws-tab-btn @(activeMode == mode ? "active" : null)"
+                        @onclick="() => SelectMode(mode)">
+                    @GetModeLabel(mode)
+                </button>
+            }
+        </div>
+
+        <SceneActionBar SceneLabel="@ActiveSceneName"
+                        Disabled="@(!CanExecute)"
+                        OnAction="RunSceneActionAsync" />
+
+        @switch (activeMode)
+        {
+            case FaldonMode.General:
+                <div class="row g-3">
+                    <div class="col-12 col-md-7">
+                        <div class="ws-control-group-title">Transiciones y Animación</div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button class="btn btn-sm btn-outline-success" @onclick="() => RunCommandAsync(GraphicCommand.PrimerosResultadosActiva)" disabled="@(!CanExecute)">Primeros ON</button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => RunCommandAsync(GraphicCommand.PrimerosResultadosDesactiva)" disabled="@(!CanExecute)">Primeros OFF</button>
+                            <button class="btn btn-sm btn-outline-primary" @onclick="() => RunCommandAsync(GraphicCommand.AnimacionSondeoActiva)" disabled="@(!CanExecute)">Animación Sondeo ON</button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => RunCommandAsync(GraphicCommand.AnimacionSondeoDesactiva)" disabled="@(!CanExecute)">Animación Sondeo OFF</button>
+                            <button class="btn btn-sm btn-warning" @onclick="() => RunCommandAsync(GraphicCommand.DeSondeoAOficiales)" disabled="@(!CanExecute)">De Sondeo a Oficiales</button>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-5">
+                        <div class="ws-control-group-title">Ámbito de Elecciones</div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button class="btn btn-sm btn-outline-dark" @onclick="() => RunCommandAsync(GraphicCommand.CambioEleccionesNacional)" disabled="@(!CanExecute)">Elecciones Nacional</button>
+                            <button class="btn btn-sm btn-outline-dark" @onclick="() => RunCommandAsync(GraphicCommand.CambioEleccionesEuropa)" disabled="@(!CanExecute)">Elecciones Europa</button>
+                        </div>
+                    </div>
+                </div>
+                break;
+
+            case FaldonMode.Ticker:
+                <div class="row g-3">
+                    <div class="col-12 col-md-3">
+                        <div class="ws-control-group-title">Ticker Votos</div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-sm btn-success flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerVotosEntra)" disabled="@(!CanExecute)">Entra</button>
+                            <button class="btn btn-sm btn-warning flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerVotosSale)" disabled="@(!CanExecute)">Sale</button>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-3">
+                        <div class="ws-control-group-title">Ticker Históricos</div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-sm btn-success flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerHistoricosEntra)" disabled="@(!CanExecute)">Entra</button>
+                            <button class="btn btn-sm btn-warning flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerHistoricosSale)" disabled="@(!CanExecute)">Sale</button>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-3">
+                        <div class="ws-control-group-title">Ticker Fotos</div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-sm btn-success flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerFotosEntra)" disabled="@(!CanExecute)">Entra</button>
+                            <button class="btn btn-sm btn-warning flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerFotosSale)" disabled="@(!CanExecute)">Sale</button>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-3">
+                        <div class="ws-control-group-title">Ticker TD</div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-sm btn-success" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDEntra)" disabled="@(!CanExecute)">Entra</button>
+                            <button class="btn btn-sm btn-primary" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDActualiza)" disabled="@(!CanExecute)">Actualiza</button>
+                            <button class="btn btn-sm btn-warning" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDSale)" disabled="@(!CanExecute)">Sale</button>
+                        </div>
+                    </div>
+                </div>
+                break;
+
+            case FaldonMode.Sedes:
+                <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+                    <div>
+                        <div class="ws-control-group-title">Partido en Sede (selección lateral o doble clic)</div>
+                        <div class="fw-semibold">
+                            @(SelectedParty is not null
+                                ? $"{SelectedParty.Siglas} ({SelectedParty.Codigo})"
+                                : "Selecciona un partido en la lista derecha")
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button class="btn btn-sm btn-success"
+                                @onclick="() => RunPartyCommandAsync(GraphicCommand.SedesEntra)"
+                                disabled="@(!CanExecute || SelectedParty is null)">
+                            Sedes Entra
+                        </button>
+                        <button class="btn btn-sm btn-primary"
+                                @onclick="() => RunPartyCommandAsync(GraphicCommand.SedesEncadena)"
+                                disabled="@(!CanExecute || SelectedParty is null)">
+                            Sedes Encadena
+                        </button>
+                        <button class="btn btn-sm btn-warning"
+                                @onclick="() => RunCommandAsync(GraphicCommand.SedesSale)"
+                                disabled="@(!CanExecute)">
+                            Sedes Sale
+                        </button>
+                    </div>
+                </div>
+                break;
+
+            case FaldonMode.VideoPrime:
+                <div class="row g-3">
+                    <div class="col-12 col-md-7">
+                        <div class="ws-control-group-title">Control de Vídeo</div>
+                        <div class="row g-2 align-items-center mb-2">
+                            <div class="col-auto">
+                                <select class="form-select form-select-sm" @bind="videoSelectionMode">
+                                    <option value="party">Por partido (tabla lateral)</option>
+                                    <option value="slot">Por fuente de vídeo (Slots 1-6)</option>
+                                </select>
+                            </div>
+                            @if (videoSelectionMode == "slot")
+                            {
+                                <div class="col">
+                                    <select class="form-select form-select-sm" @bind="selectedVideoSlot">
+                                        @foreach (var source in videoSources.OrderBy(x => x.Slot))
+                                        {
+                                            var modeLabel = source.IsLive ? "Directo" : "Pregrabado";
+                                            var pathLabel = string.IsNullOrWhiteSpace(source.Path) ? "(sin ruta)" : source.Path;
+                                            <option value="@source.Slot">@($"Slot {source.Slot} - {modeLabel} - {pathLabel}")</option>
+                                        }
+                                    </select>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="col small text-muted">
+                                    Partido activo: <strong>@(SelectedParty?.Siglas ?? "Ninguno")</strong>
+                                </div>
+                            }
+                        </div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoPrepara)" disabled="@(!CanExecute || !HasVideoTarget)">Prepara</button>
+                            <button class="btn btn-sm btn-success" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoIn)" disabled="@(!CanExecute || !HasVideoTarget)">Video In</button>
+                            <button class="btn btn-sm btn-warning" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOut)" disabled="@(!CanExecute || !HasVideoTarget)">Video Out</button>
+                            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoInTodos)" disabled="@(!CanExecute)">In Todos</button>
+                            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOutTodos)" disabled="@(!CanExecute)">Out Todos</button>
+                        </div>
+                    </div>
+
+                    <div class="col-12 col-md-5">
+                        <div class="ws-control-group-title">Rótulos Prime</div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button class="btn btn-sm btn-success" @onclick="() => RunCommandAsync(GraphicCommand.PrimeSubirRotulosTD)" disabled="@(!CanExecute)">Subir TD</button>
+                            <button class="btn btn-sm btn-warning" @onclick="() => RunCommandAsync(GraphicCommand.PrimeBajarRotulosTD)" disabled="@(!CanExecute)">Bajar TD</button>
+                            <button class="btn btn-sm btn-outline-success" @onclick="() => RunCommandAsync(GraphicCommand.PrimeSubirRotulosEspeciales)" disabled="@(!CanExecute)">Subir Especiales</button>
+                            <button class="btn btn-sm btn-outline-warning" @onclick="() => RunCommandAsync(GraphicCommand.PrimeBajarRotulosEspeciales)" disabled="@(!CanExecute)">Bajar Especiales</button>
+                        </div>
+                    </div>
+                </div>
+                break;
+
+            case FaldonMode.Pactometro:
+                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-sm btn-success" @onclick="EnterPactosAsync" disabled="@(!CanExecute)">Pactos Entra</button>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="ResetPactosAsync" disabled="@(!CanExecute)">Pactos Reinicio</button>
+                        <button class="btn btn-sm btn-warning" @onclick="ExitPactosAsync" disabled="@(!CanExecute)">Pactos Sale</button>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-sm btn-outline-success" @onclick="AddLeftAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Izquierda (@(SelectedParty?.Siglas ?? "-"))</button>
+                        <button class="btn btn-sm btn-outline-warning" @onclick="RemoveLeftAsync" disabled="@(!CanExecute || leftParties.Count == 0)">- Izquierda</button>
+                        <button class="btn btn-sm btn-outline-primary" @onclick="AddRightAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Derecha (@(SelectedParty?.Siglas ?? "-"))</button>
+                        <button class="btn btn-sm btn-outline-warning" @onclick="RemoveRightAsync" disabled="@(!CanExecute || rightParties.Count == 0)">- Derecha</button>
+                    </div>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-12 col-md-6">
+                        <div class="border rounded p-2 bg-light">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <span class="fw-bold small text-uppercase text-muted">Bloque Izquierda</span>
+                                <span class="badge bg-success fs-6">@leftParties.Sum(GetDisplayEscanos) esc</span>
+                            </div>
+                            <div class="d-flex flex-wrap gap-1">
+                                @if (leftParties.Count == 0)
+                                {
+                                    <span class="text-muted small">Sin partidos</span>
+                                }
+                                else
+                                {
+                                    @foreach (var p in leftParties)
+                                    {
+                                        <span class="badge bg-white text-dark border">@p.Siglas (@GetDisplayEscanos(p))</span>
+                                    }
+                                }
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <div class="border rounded p-2 bg-light">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <span class="fw-bold small text-uppercase text-muted">Bloque Derecha</span>
+                                <span class="badge bg-primary fs-6">@rightParties.Sum(GetDisplayEscanos) esc</span>
+                            </div>
+                            <div class="d-flex flex-wrap gap-1">
+                                @if (rightParties.Count == 0)
+                                {
+                                    <span class="text-muted small">Sin partidos</span>
+                                }
+                                else
+                                {
+                                    @foreach (var p in rightParties)
+                                    {
+                                        <span class="badge bg-white text-dark border">@p.Siglas (@GetDisplayEscanos(p))</span>
+                                    }
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                break;
+
+            case FaldonMode.CuentaAtras:
+                <div class="d-flex align-items-center gap-3">
+                    <label class="form-label mb-0 fw-semibold">Segundos de cuenta atrás:</label>
+                    <input class="form-control form-control-sm" style="max-width: 120px;" type="number" min="0" @bind="sceneSeconds" />
+                </div>
+                break;
+        }
+    </section>
+
+    <PartySidebarTable Parties="@availableParties"
+                       SelectedPartyCode="@selectedPartyCode"
+                       Oficiales="@globalSettings.Oficiales"
+                       ShowUltimoIndicators="false"
+                       Loading="@loadingParties"
+                       OnPartySelected="OnPartySelected"
+                       OnPartyDoubleClicked="OnPartyDoubleClickedAsync"
+                       OnRefreshClicked="LoadPartiesAsync" />
+</div>
+
+@code {
+    private enum FaldonMode
+    {
+        General,
+        Ticker,
+        Sedes,
+        VideoPrime,
+        Pactometro,
+        CuentaAtras
+    }
+
+    private FaldonMode activeMode = FaldonMode.General;
+    private string operatorId = WorkspaceResolver.DefaultFaldonOperator;
+    private GlobalOperationalSettings globalSettings = new();
+    private ModuleOperationalState moduleState = new() { Module = GraphicModule.Faldon };
+
+    private IReadOnlyList<CircunscripcionSummary> circunscripciones = [];
+    private IReadOnlyList<MedioSummary> medios = [new("RTVE", "RTVE")];
+    private IReadOnlyList<PartidoSnapshot> availableParties = [];
+    private IReadOnlyList<VideoSourceOptions> videoSources = [];
+    private readonly List<PartidoSnapshot> leftParties = [];
+    private readonly List<PartidoSnapshot> rightParties = [];
+
+    private string selectedCircunscripcionCodigo = string.Empty;
+    private string selectedMedioCodigo = "RTVE";
+    private string selectedPartyCode = string.Empty;
+    private string videoSelectionMode = "party";
+    private int selectedVideoSlot = 1;
+    private int sceneSeconds = 60;
+    private bool loadingParties;
+    private string feedbackMessage = string.Empty;
+    private bool feedbackIsError;
+
+    private string ActiveSceneName => activeMode switch
+    {
+        FaldonMode.General => globalSettings.Oficiales ? "Escrutinio" : "Sondeo",
+        FaldonMode.Ticker => "TICKER",
+        FaldonMode.Sedes => "SEDES",
+        FaldonMode.VideoPrime => "TICKER",
+        FaldonMode.Pactometro => "Pactometro",
+        FaldonMode.CuentaAtras => "CuentaAtras",
+        _ => "Escrutinio"
+    };
+
+    private PartidoSnapshot? SelectedParty => availableParties.FirstOrDefault(p =>
+        string.Equals(p.Codigo, selectedPartyCode, StringComparison.OrdinalIgnoreCase));
+
+    private bool CanOperate => AuthorizationService.CanOperate(operatorId, GraphicModule.Faldon);
+    private bool IsOwner => ModuleLockService.IsOwner(GraphicModule.Faldon, operatorId);
+    private bool CanExecute => CanOperate && IsOwner;
+    private bool HasVideoTarget => videoSelectionMode == "slot" ? selectedVideoSlot is >= 1 and <= 6 : SelectedParty is not null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        operatorId = WorkspaceResolver.ResolveEffectiveOperatorId(
+            WorkspaceKind.Faldon,
+            authState.User.Identity?.Name,
+            AuthConfig.AutoLoginByWorkspace);
+
+        globalSettings = GlobalSettingsService.GetSettings();
+        moduleState = StateService.GetState(GraphicModule.Faldon);
+        videoSources = LoadVideoSourcesFromConfig();
+        selectedVideoSlot = videoSources.FirstOrDefault()?.Slot ?? 1;
+
+        GlobalSettingsService.OnSettingsChanged += HandleGlobalSettingsChanged;
+        StateService.OnStateChanged += HandleOperationalStateChanged;
+        ModuleLockService.LocksChanged += HandleLocksChanged;
+
+        EnsureAutoLock();
+        await ReloadReferenceDataAsync();
+        await LoadPartiesAsync();
+    }
+
+    private void EnsureAutoLock()
+    {
+        if (CanOperate && !IsOwner)
+        {
+            ModuleLockService.TryAcquire(GraphicModule.Faldon, operatorId);
+        }
+    }
+
+    private void ClaimModuleLock()
+    {
+        if (!CanOperate)
+        {
+            return;
+        }
+
+        ModuleLockService.ForceRelease(GraphicModule.Faldon);
+        var ok = ModuleLockService.TryAcquire(GraphicModule.Faldon, operatorId);
+        feedbackMessage = ok ? "Control de Faldón activo." : "No se pudo tomar el control.";
+        feedbackIsError = !ok;
+    }
+
+    private static string GetModeLabel(FaldonMode mode) => mode switch
+    {
+        FaldonMode.General => "Escrutinio / Sondeo",
+        FaldonMode.Ticker => "Ticker",
+        FaldonMode.Sedes => "Sedes",
+        FaldonMode.VideoPrime => "Vídeo / Prime",
+        FaldonMode.Pactometro => "Pactómetro",
+        FaldonMode.CuentaAtras => "Cuenta Atrás",
+        _ => mode.ToString()
+    };
+
+    private void SelectMode(FaldonMode mode)
+    {
+        activeMode = mode;
+    }
+
+    private void OnPartySelected(PartidoSnapshot party)
+    {
+        selectedPartyCode = party.Codigo;
+    }
+
+    private async Task OnPartyDoubleClickedAsync(PartidoSnapshot party)
+    {
+        selectedPartyCode = party.Codigo;
+        if (activeMode == FaldonMode.Sedes)
+        {
+            await RunPartyCommandAsync(GraphicCommand.SedesEntra);
+        }
+        else if (activeMode == FaldonMode.Pactometro)
+        {
+            await AddLeftAsync();
+        }
+        else if (activeMode == FaldonMode.VideoPrime && videoSelectionMode == "party")
+        {
+            await ExecuteVideoCommandAsync(GraphicCommand.VideoIn);
+        }
+    }
+
+    private async Task OnCircunscripcionChangedAsync(ChangeEventArgs args)
+    {
+        selectedCircunscripcionCodigo = args.Value?.ToString() ?? string.Empty;
+        await LoadPartiesAsync();
+    }
+
+    private async Task OnMedioChangedAsync(ChangeEventArgs args)
+    {
+        selectedMedioCodigo = args.Value?.ToString() ?? "RTVE";
+        await LoadPartiesAsync();
+    }
+
+    private async Task ReloadReferenceDataAsync()
+    {
+        var previousCirc = selectedCircunscripcionCodigo;
+        var previousMedio = selectedMedioCodigo;
+
+        circunscripciones = await DataService.GetCircunscripcionesAsync(globalSettings.ElectionSlot, globalSettings.ConnectionType);
+        selectedCircunscripcionCodigo = circunscripciones.FirstOrDefault(x => x.Codigo == previousCirc)?.Codigo
+            ?? circunscripciones.FirstOrDefault()?.Codigo
+            ?? string.Empty;
+
+        var loadedMedios = await DataService.GetMediosAsync(globalSettings.ElectionSlot, globalSettings.ConnectionType);
+        var list = new List<MedioSummary> { new("RTVE", "RTVE") };
+        list.AddRange(loadedMedios
+            .Where(x => !string.IsNullOrWhiteSpace(x.Codigo) && !string.Equals(x.Codigo, "RTVE", StringComparison.OrdinalIgnoreCase))
+            .DistinctBy(x => x.Codigo)
+            .Select(x => new MedioSummary(x.Codigo.Trim(), string.IsNullOrWhiteSpace(x.Descripcion) ? x.Codigo.Trim() : x.Descripcion.Trim())));
+        medios = list;
+        selectedMedioCodigo = medios.FirstOrDefault(x => string.Equals(x.Codigo, previousMedio, StringComparison.OrdinalIgnoreCase))?.Codigo
+            ?? "RTVE";
+    }
+
+    private async Task LoadPartiesAsync()
+    {
+        loadingParties = true;
+        try
+        {
+            var snapshot = await DataService.GetSnapshotAsync(BuildQuery(), globalSettings.Oficiales);
+            availableParties = snapshot.Partidos
+                .Where(x => !string.IsNullOrWhiteSpace(x.Codigo))
+                .OrderByDescending(GetDisplayEscanos)
+                .ThenByDescending(x => x.Votos)
+                .ToList();
+
+            if (string.IsNullOrWhiteSpace(selectedPartyCode) || !availableParties.Any(p => string.Equals(p.Codigo, selectedPartyCode, StringComparison.OrdinalIgnoreCase)))
+            {
+                selectedPartyCode = availableParties.FirstOrDefault()?.Codigo ?? string.Empty;
+            }
+        }
+        catch (Exception ex)
+        {
+            feedbackMessage = $"Error cargando partidos: {ex.Message}";
+            feedbackIsError = true;
+        }
+        finally
+        {
+            loadingParties = false;
+        }
+    }
+
+    private async Task RunSceneActionAsync(OperationActionType action)
+    {
+        EnsureAutoLock();
+        var request = new OperationRequest
+        {
+            OperatorId = operatorId,
+            Module = GraphicModule.Faldon,
+            Scene = ActiveSceneName,
+            Action = action,
+            SceneSeconds = activeMode == FaldonMode.CuentaAtras && sceneSeconds > 0 ? sceneSeconds : null,
+            Command = GraphicCommand.None,
+            Target = globalSettings.Target,
+            Oficiales = globalSettings.Oficiales,
+            ExportName = globalSettings.ExportName,
+            Query = BuildQuery()
+        };
+
+        var result = await OperationService.ExecuteAsync(request);
+        feedbackMessage = result.Message;
+        feedbackIsError = !result.Success;
+    }
+
+    private async Task<bool> RunCommandAsync(GraphicCommand command, string commandValue = "")
+    {
+        EnsureAutoLock();
+        var request = new OperationRequest
+        {
+            OperatorId = operatorId,
+            Module = GraphicModule.Faldon,
+            Scene = ActiveSceneName,
+            Action = OperationActionType.Update,
+            SceneSeconds = activeMode == FaldonMode.CuentaAtras && sceneSeconds > 0 ? sceneSeconds : null,
+            Command = command,
+            CommandValue = commandValue,
+            Target = globalSettings.Target,
+            Oficiales = globalSettings.Oficiales,
+            ExportName = globalSettings.ExportName,
+            Query = BuildQuery()
+        };
+
+        var result = await OperationService.ExecuteAsync(request);
+        feedbackMessage = result.Message;
+        feedbackIsError = !result.Success;
+        return result.Success;
+    }
+
+    private async Task RunPartyCommandAsync(GraphicCommand command)
+    {
+        if (SelectedParty is null)
+        {
+            return;
+        }
+
+        await RunCommandAsync(command, SelectedParty.Codigo);
+    }
+
+    private async Task ExecuteVideoCommandAsync(GraphicCommand command)
+    {
+        var commandValue = command switch
+        {
+            GraphicCommand.VideoInTodos or GraphicCommand.VideoOutTodos => string.Empty,
+            _ => videoSelectionMode == "slot" ? $"slot:{selectedVideoSlot}" : (SelectedParty?.Codigo ?? string.Empty)
+        };
+
+        await RunCommandAsync(command, commandValue);
+    }
+
+    private async Task EnterPactosAsync() => await RunCommandAsync(GraphicCommand.PactosEntra);
+
+    private async Task ResetPactosAsync()
+    {
+        if (await RunCommandAsync(GraphicCommand.PactosReinicio))
+        {
+            leftParties.Clear();
+            rightParties.Clear();
+        }
+    }
+
+    private async Task ExitPactosAsync()
+    {
+        if (await RunCommandAsync(GraphicCommand.PactosSale))
+        {
+            leftParties.Clear();
+            rightParties.Clear();
+        }
+    }
+
+    private async Task AddLeftAsync()
+    {
+        if (SelectedParty is null || leftParties.Any(x => string.Equals(x.Codigo, SelectedParty.Codigo, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        if (await RunCommandAsync(GraphicCommand.PactosEntraIzquierda, SelectedParty.Codigo))
+        {
+            leftParties.Add(SelectedParty);
+        }
+    }
+
+    private async Task AddRightAsync()
+    {
+        if (SelectedParty is null || rightParties.Any(x => string.Equals(x.Codigo, SelectedParty.Codigo, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        if (await RunCommandAsync(GraphicCommand.PactosEntraDerecha, SelectedParty.Codigo))
+        {
+            rightParties.Add(SelectedParty);
+        }
+    }
+
+    private async Task RemoveLeftAsync()
+    {
+        if (leftParties.Count > 0 && await RunCommandAsync(GraphicCommand.PactosSaleIzquierda))
+        {
+            leftParties.RemoveAt(leftParties.Count - 1);
+        }
+    }
+
+    private async Task RemoveRightAsync()
+    {
+        if (rightParties.Count > 0 && await RunCommandAsync(GraphicCommand.PactosSaleDerecha))
+        {
+            rightParties.RemoveAt(rightParties.Count - 1);
+        }
+    }
+
+    private int GetDisplayEscanos(PartidoSnapshot p) => globalSettings.Oficiales ? p.Escanios : p.EscaniosHastaSondeo;
+
+    private SnapshotQuery BuildQuery() => new()
+    {
+        ElectionSlot = globalSettings.ElectionSlot,
+        ConnectionType = globalSettings.ConnectionType,
+        Kind = SnapshotQueryKind.Circunscripcion,
+        CircunscripcionCodigo = selectedCircunscripcionCodigo,
+        Avance = globalSettings.Avance == 0 ? null : globalSettings.Avance,
+        IncludeZeroSeats = globalSettings.IncludeZeroSeats,
+        MedioCodigo = selectedMedioCodigo.Trim()
+    };
+
+    private IReadOnlyList<VideoSourceOptions> LoadVideoSourcesFromConfig()
+    {
+        var result = new List<VideoSourceOptions>();
+        for (var i = 0; i < 6; i++)
+        {
+            var slot = int.TryParse(Configuration[$"Operational:VideoSources:{i}:Slot"], out var parsedSlot) ? Math.Clamp(parsedSlot, 1, 6) : i + 1;
+            var isLive = bool.TryParse(Configuration[$"Operational:VideoSources:{i}:IsLive"], out var parsedLive) && parsedLive;
+            var path = Configuration[$"Operational:VideoSources:{i}:Path"]?.Trim() ?? string.Empty;
+            result.Add(new VideoSourceOptions { Slot = slot, IsLive = isLive, Path = path });
+        }
+
+        return result.OrderBy(x => x.Slot).ToList();
+    }
+
+    private void HandleGlobalSettingsChanged(GlobalOperationalSettings updated)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            var slotOrConnChanged = updated.ElectionSlot != globalSettings.ElectionSlot
+                                    || updated.ConnectionType != globalSettings.ConnectionType;
+            var modeChanged = updated.Oficiales != globalSettings.Oficiales;
+            globalSettings = updated;
+
+            if (slotOrConnChanged)
+            {
+                await ReloadReferenceDataAsync();
+            }
+
+            if (slotOrConnChanged || modeChanged)
+            {
+                await LoadPartiesAsync();
+            }
+
+            StateHasChanged();
+        });
+    }
+
+    private void HandleOperationalStateChanged(GraphicModule module, ModuleOperationalState state)
+    {
+        if (module != GraphicModule.Faldon)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            moduleState = state;
+            StateHasChanged();
+        });
+    }
+
+    private void HandleLocksChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        GlobalSettingsService.OnSettingsChanged -= HandleGlobalSettingsChanged;
+        StateService.OnStateChanged -= HandleOperationalStateChanged;
+        ModuleLockService.LocksChanged -= HandleLocksChanged;
+    }
+}
+

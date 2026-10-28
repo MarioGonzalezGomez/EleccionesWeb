@@ -1,4 +1,4 @@
-﻿using Elecciones.Application.Abstractions;
+using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
 
 namespace Elecciones.Application.Services;
@@ -105,6 +105,36 @@ public sealed class ModuleLockService : IModuleLockService
         }
 
         return released;
+    }
+
+    public bool ForceRelease(GraphicModule module)
+    {
+        var released = false;
+
+        lock (_sync)
+        {
+            RefreshFromStoreUnsafe();
+            var state = _states[module];
+            if (!state.IsLocked && !state.IsOnAir && string.IsNullOrWhiteSpace(state.Owner))
+            {
+                return true;
+            }
+
+            state.IsLocked = false;
+            state.IsOnAir = false;
+            state.Owner = string.Empty;
+            state.LockedAtUtc = null;
+            released = true;
+
+            PersistUnsafe();
+        }
+
+        if (released)
+        {
+            LocksChanged?.Invoke();
+        }
+
+        return true;
     }
 
     public bool IsOwner(GraphicModule module, string operatorId)

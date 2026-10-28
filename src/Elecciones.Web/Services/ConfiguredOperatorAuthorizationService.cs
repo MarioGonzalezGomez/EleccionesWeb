@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
+using Elecciones.Application.Services;
 
 namespace EleccionesWeb.Services;
 
@@ -15,6 +16,7 @@ public sealed class ConfiguredOperatorAuthorizationService :
 
     private readonly Dictionary<string, OperatorGrant> _grants;
     private readonly bool _allowAllWhenEmpty;
+    public bool AutoLoginByWorkspace { get; }
 
     public ConfiguredOperatorAuthorizationService(IConfiguration configuration)
     {
@@ -22,6 +24,7 @@ public sealed class ConfiguredOperatorAuthorizationService :
         configuration.GetSection("OperatorAuthorization").Bind(config);
 
         _allowAllWhenEmpty = config.AllowAllWhenEmpty;
+        AutoLoginByWorkspace = config.AutoLoginByWorkspace;
         _grants = new Dictionary<string, OperatorGrant>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var entry in config.Operators)
@@ -44,13 +47,7 @@ public sealed class ConfiguredOperatorAuthorizationService :
                 modules = AllModules.ToList();
             }
 
-            var byModule = new Dictionary<GraphicModule, ModulePermissionGrant>();
-            foreach (var module in modules)
-            {
-                byModule[module] = new ModulePermissionGrant(
-                    AllActions.ToHashSet(),
-                    AllCommands.ToHashSet());
-            }
+            var byModule = CreateDefaultModuleGrants(modules);
 
             foreach (var permission in entry.Permissions)
             {
@@ -87,6 +84,63 @@ public sealed class ConfiguredOperatorAuthorizationService :
                 entry.PasswordSha256?.Trim() ?? string.Empty,
                 entry.PasswordEnvVar?.Trim() ?? string.Empty);
         }
+
+        EnsureWorkspaceDefaultGrants();
+    }
+
+    private void EnsureWorkspaceDefaultGrants()
+    {
+        if (!_grants.ContainsKey(WorkspaceResolver.DefaultFaldonOperator))
+        {
+            var modules = new List<GraphicModule> { GraphicModule.Faldon };
+            _grants[WorkspaceResolver.DefaultFaldonOperator] = new OperatorGrant(
+                WorkspaceResolver.DefaultFaldonOperator,
+                "faldon",
+                modules,
+                CreateDefaultModuleGrants(modules),
+                WorkspaceResolver.DefaultFaldonOperator,
+                string.Empty,
+                string.Empty);
+        }
+
+        if (!_grants.ContainsKey(WorkspaceResolver.DefaultCartonOperator))
+        {
+            var modules = new List<GraphicModule> { GraphicModule.Carton };
+            _grants[WorkspaceResolver.DefaultCartonOperator] = new OperatorGrant(
+                WorkspaceResolver.DefaultCartonOperator,
+                "carton",
+                modules,
+                CreateDefaultModuleGrants(modules),
+                WorkspaceResolver.DefaultCartonOperator,
+                string.Empty,
+                string.Empty);
+        }
+
+        if (!_grants.ContainsKey(WorkspaceResolver.DefaultAdminOperator))
+        {
+            var modules = AllModules.ToList();
+            _grants[WorkspaceResolver.DefaultAdminOperator] = new OperatorGrant(
+                WorkspaceResolver.DefaultAdminOperator,
+                "admin",
+                modules,
+                CreateDefaultModuleGrants(modules),
+                WorkspaceResolver.DefaultAdminOperator,
+                string.Empty,
+                string.Empty);
+        }
+    }
+
+    private static Dictionary<GraphicModule, ModulePermissionGrant> CreateDefaultModuleGrants(IEnumerable<GraphicModule> modules)
+    {
+        var byModule = new Dictionary<GraphicModule, ModulePermissionGrant>();
+        foreach (var module in modules)
+        {
+            byModule[module] = new ModulePermissionGrant(
+                AllActions.ToHashSet(),
+                AllCommands.ToHashSet());
+        }
+
+        return byModule;
     }
 
     public bool ValidateCredentials(string operatorId, string password)
@@ -125,7 +179,7 @@ public sealed class ConfiguredOperatorAuthorizationService :
             return grant.Modules.Contains(module);
         }
 
-        return _allowAllWhenEmpty && _grants.Count == 0;
+        return _allowAllWhenEmpty;
     }
 
     public bool CanExecuteAction(string operatorId, GraphicModule module, OperationActionType action)
@@ -137,7 +191,7 @@ public sealed class ConfiguredOperatorAuthorizationService :
                    && permission.Actions.Contains(action);
         }
 
-        return _allowAllWhenEmpty && _grants.Count == 0;
+        return _allowAllWhenEmpty;
     }
 
     public bool CanExecuteCommand(string operatorId, GraphicModule module, GraphicCommand command)
@@ -149,7 +203,7 @@ public sealed class ConfiguredOperatorAuthorizationService :
                    && permission.Commands.Contains(command);
         }
 
-        return _allowAllWhenEmpty && _grants.Count == 0;
+        return _allowAllWhenEmpty;
     }
 
     public string GetRole(string operatorId)
@@ -160,7 +214,7 @@ public sealed class ConfiguredOperatorAuthorizationService :
             return grant.Role;
         }
 
-        return _allowAllWhenEmpty && _grants.Count == 0 ? "admin" : "viewer";
+        return _allowAllWhenEmpty ? "admin" : "viewer";
     }
 
     public IReadOnlyList<GraphicModule> GetAllowedModules(string operatorId)
@@ -171,7 +225,7 @@ public sealed class ConfiguredOperatorAuthorizationService :
             return grant.ModuleList;
         }
 
-        return _allowAllWhenEmpty && _grants.Count == 0 ? AllModules : [];
+        return _allowAllWhenEmpty ? AllModules : [];
     }
 
     private OperatorGrant? ResolveGrant(string operatorId)
@@ -269,6 +323,7 @@ public sealed class ConfiguredOperatorAuthorizationService :
     private sealed class OperatorAuthorizationConfig
     {
         public bool AllowAllWhenEmpty { get; set; }
+        public bool AutoLoginByWorkspace { get; set; } = true;
         public List<OperatorEntry> Operators { get; set; } = [];
     }
 

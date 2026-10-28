@@ -1,4 +1,4 @@
-﻿using Elecciones.Application.Models;
+using Elecciones.Application.Models;
 
 namespace Elecciones.Application.Abstractions;
 
@@ -7,5 +7,6 @@ public interface IGraphicsGateway
     Task<IReadOnlyList<string>> SendAsync(
         GraphicsTarget target,
         string message,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        GraphicModule? module = null);
 }

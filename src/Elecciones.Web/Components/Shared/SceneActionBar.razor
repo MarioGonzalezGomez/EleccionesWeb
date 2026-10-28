@@ -1,0 +1,43 @@
+@using Elecciones.Application.Models
+
+<div class="ws-action-bar">
+    <span class="small fw-bold text-uppercase text-muted me-2">Escena: <strong class="text-dark">@SceneLabel</strong></span>
+    <button class="btn btn-sm btn-outline-secondary ws-action-btn"
+            type="button"
+            @onclick="() => OnAction.InvokeAsync(OperationActionType.Prepare)"
+            disabled="@Disabled">
+        PREPARA
+    </button>
+    <button class="btn btn-sm btn-success ws-action-btn"
+            type="button"
+            @onclick="() => OnAction.InvokeAsync(OperationActionType.Enter)"
+            disabled="@Disabled">
+        ENTRA
+    </button>
+    <button class="btn btn-sm btn-primary ws-action-btn"
+            type="button"
+            @onclick="() => OnAction.InvokeAsync(OperationActionType.Update)"
+            disabled="@Disabled">
+        @UpdateLabel
+    </button>
+    <button class="btn btn-sm btn-warning ws-action-btn"
+            type="button"
+            @onclick="() => OnAction.InvokeAsync(OperationActionType.Exit)"
+            disabled="@Disabled">
+        SALE
+    </button>
+    <button class="btn btn-sm btn-outline-danger ms-auto"
+            type="button"
+            @onclick="() => OnAction.InvokeAsync(OperationActionType.Reset)"
+            disabled="@Disabled">
+        RESET
+    </button>
+</div>
+
+@code {
+    [Parameter] public string SceneLabel { get; set; } = string.Empty;
+    [Parameter] public string UpdateLabel { get; set; } = "ACTUALIZA";
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback<OperationActionType> OnAction { get; set; }
+}
+
