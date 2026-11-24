@@ -168,11 +168,12 @@ app.MapPost("/auth/login", async (
 })
 .DisableAntiforgery();
 
-app.MapGet("/auth/logout", async (HttpContext httpContext) =>
+app.MapPost("/auth/logout", async (HttpContext httpContext) =>
 {
     await httpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Redirect("/login");
-});
+})
+.DisableAntiforgery();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

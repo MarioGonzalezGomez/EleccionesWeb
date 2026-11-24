@@ -2,32 +2,60 @@
 @attribute [AllowAnonymous]
 @inject NavigationManager Navigation
 
-<PageTitle>Login</PageTitle>
+<PageTitle>Acceso - Consola de Operación Electoral</PageTitle>
 
-<h1>Acceso operacion</h1>
+<div class="ws-auth-page">
+    <div class="ws-auth-card">
+        <button type="button"
+                class="ws-icon-btn position-absolute top-0 end-0 m-3"
+                onclick="window.eleccionesTheme && window.eleccionesTheme.toggle()"
+                title="Alternar tema oscuro / claro"
+                aria-label="Alternar tema oscuro o claro">
+            <svg class="ws-theme-icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2M12 20v2m-7.07-14.93 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+            </svg>
+            <svg class="ws-theme-icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+            </svg>
+        </button>
 
-@if (hasError)
-{
-    <div class="alert alert-danger" role="alert">
-        Credenciales invalidas.
+        <div class="text-center mb-4 mt-1">
+            <div class="ws-brand-mark mb-3 py-2 px-3">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="2" />
+                    <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14" />
+                </svg>
+                <span>ELECCIONES · MCR</span>
+            </div>
+            <h1 class="h5 mb-1 fw-semibold">Consola de Operación</h1>
+            <p class="small text-muted mb-0">Identificación de operador autorizado</p>
+        </div>
+
+        @if (hasError)
+        {
+            <div class="ws-banner ws-banner-error justify-content-center mb-3" role="alert">
+                Credenciales inválidas. Verifica usuario y contraseña.
+            </div>
+        }
+
+        <form method="post" action="/auth/login" data-enhance="false">
+            <input type="hidden" name="returnUrl" value="@returnUrl" />
+
+            <div class="mb-3">
+                <label class="form-label" for="username">Usuario</label>
+                <input id="username" name="username" class="form-control" autocomplete="username" required />
+            </div>
+
+            <div class="mb-4">
+                <label class="form-label" for="password">Contraseña</label>
+                <input id="password" name="password" type="password" class="form-control" autocomplete="current-password" required />
+            </div>
+
+            <button class="ws-btn ws-btn-primary w-100 py-2" type="submit">Entrar a la consola</button>
+        </form>
     </div>
-}
-
-<form method="post" action="/auth/login" class="border rounded p-3" style="max-width: 460px;">
-    <input type="hidden" name="returnUrl" value="@returnUrl" />
-
-    <div class="mb-3">
-        <label class="form-label" for="username">Usuario</label>
-        <input id="username" name="username" class="form-control" required />
-    </div>
-
-    <div class="mb-3">
-        <label class="form-label" for="password">Contrasena</label>
-        <input id="password" name="password" type="password" class="form-control" required />
-    </div>
-
-    <button class="btn btn-primary" type="submit">Entrar</button>
-</form>
+</div>
 
 @code {
     private bool hasError;

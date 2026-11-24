@@ -2,24 +2,38 @@
     min-height: 100vh;
     display: flex;
     flex-direction: column;
-    background-color: #f4f6f9;
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
 }
 
 #blazor-error-ui {
-    background: #fff3cd;
-    border-top: 1px solid #ffecb5;
+    background: var(--status-danger-soft);
+    color: var(--status-danger-text);
+    border-top: 1px solid var(--status-danger-border);
+    backdrop-filter: blur(8px);
     bottom: 0;
     display: none;
     left: 0;
-    padding: 0.6rem 1.25rem;
+    padding: 0.65rem 2.5rem 0.65rem 1.25rem;
     position: fixed;
     width: 100%;
     z-index: 1000;
+    font-size: 0.84rem;
+}
+
+#blazor-error-ui .reload {
+    color: var(--text-primary);
+    font-weight: 600;
+    margin-left: 0.5rem;
 }
 
 #blazor-error-ui .dismiss {
     cursor: pointer;
     position: absolute;
-    right: 0.75rem;
+    right: 0.9rem;
     top: 0.5rem;
+    font-size: 1.1rem;
+    line-height: 1;
+    color: var(--text-secondary);
+    text-decoration: none;
 }

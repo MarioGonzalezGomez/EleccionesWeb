@@ -1,0 +1,58 @@
+@using Elecciones.Application.Models
+
+<div class="ws-quicknav">
+    <nav class="ws-nav-seg" aria-label="Cambiar consola de operación">
+        <a href="/control" class="ws-nav-link @(Current == WorkspaceKind.ControlGeneral ? "active" : null)">
+            Control
+        </a>
+        <a href="/faldon" class="ws-nav-link @(Current == WorkspaceKind.Faldon ? "active" : null)">
+            Faldón
+        </a>
+        <a href="/carton" class="ws-nav-link @(Current == WorkspaceKind.Carton ? "active" : null)">
+            Cartón
+        </a>
+    </nav>
+
+    @if (!string.IsNullOrWhiteSpace(OperatorId))
+    {
+        <span class="ws-chip ws-mono" title="Operador activo">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+            </svg>
+            @OperatorId
+        </span>
+    }
+
+    <button type="button"
+            class="ws-icon-btn"
+            onclick="window.eleccionesTheme && window.eleccionesTheme.toggle()"
+            title="Alternar tema oscuro / claro"
+            aria-label="Alternar tema oscuro o claro">
+        <svg class="ws-theme-icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2m-7.07-14.93 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+        </svg>
+        <svg class="ws-theme-icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+        </svg>
+    </button>
+
+    <form method="post" action="/auth/logout" data-enhance="false" class="d-inline-flex m-0">
+        <button type="submit"
+                class="ws-icon-btn"
+                title="Cerrar sesión"
+                aria-label="Cerrar sesión">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" x2="9" y1="12" y2="12" />
+            </svg>
+        </button>
+    </form>
+</div>
+
+@code {
+    [Parameter] public WorkspaceKind Current { get; set; }
+    [Parameter] public string OperatorId { get; set; } = string.Empty;
+}

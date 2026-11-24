@@ -23,31 +23,38 @@
 <PageTitle>Control General</PageTitle>
 
 <header class="ws-topbar">
-    <div class="d-flex align-items-center gap-2 flex-wrap">
-        <span class="ws-badge-title">Control General</span>
+    <div class="ws-topbar-cluster">
+        <span class="ws-brand-mark">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                <line x1="8" y1="21" x2="16" y2="21"/>
+                <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+            Control General
+        </span>
         <span class="ws-onair-pill @(faldonState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
-            @(faldonState.IsOnAir ? $"● FALDÓN: {faldonState.ActiveScene}" : "○ FALDÓN: FUERA")
+            <span class="ws-tally-dot"></span> FALDÓN: @(faldonState.IsOnAir ? faldonState.ActiveScene : "FUERA")
         </span>
         <span class="ws-onair-pill @(cartonState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
-            @(cartonState.IsOnAir ? $"● CARTÓN: {cartonState.ActiveScene}" : "○ CARTÓN: FUERA")
+            <span class="ws-tally-dot"></span> CARTÓN: @(cartonState.IsOnAir ? cartonState.ActiveScene : "FUERA")
         </span>
     </div>
 
-    <div class="d-flex align-items-center gap-2 flex-wrap">
-        <span class="badge bg-secondary">
+    <div class="ws-topbar-cluster">
+        <span class="ws-chip ws-chip-accent">
             Elección @globalSnapshot.ElectionSlot · @GetConnectionLabel(globalSnapshot.ConnectionType) · @globalSnapshot.Target
         </span>
-        <span class="badge @(globalSnapshot.Oficiales ? "bg-primary" : "bg-warning text-dark")">
+        <span class="ws-chip @(globalSnapshot.Oficiales ? "ws-chip-live" : "ws-chip-amber")">
             @(globalSnapshot.Oficiales ? $"OFICIALES (Av.{globalSnapshot.Avance})" : "SONDEO")
         </span>
-        <span class="badge @(globalSnapshot.AutoRefreshEnabled ? "bg-success" : "bg-secondary")">
+        <span class="ws-chip @(globalSnapshot.AutoRefreshEnabled ? "ws-chip-live" : "")">
             Auto-Refresh: @(globalSnapshot.AutoRefreshEnabled ? $"ON ({globalSnapshot.AutoRefreshIntervalSeconds}s)" : "OFF")
         </span>
-        <span class="badge bg-dark border border-secondary">@currentOperatorId</span>
+        <WorkspaceQuickNav Current="WorkspaceKind.ControlGeneral" OperatorId="@currentOperatorId" />
     </div>
 </header>
 
-<div class="p-3">
+<main class="ws-main-container">
     <div class="ws-tabs">
         <button type="button" class="ws-tab-btn @(activeTab == ControlTab.GlobalLive ? "active" : "")" @onclick="() => activeTab = ControlTab.GlobalLive">
             Control Global (En Vivo)
@@ -62,9 +69,14 @@
 
     @if (!string.IsNullOrWhiteSpace(feedbackMessage))
     {
-        <div class="alert @(feedbackIsError ? "alert-danger" : "alert-success") py-2 px-3 small d-flex justify-content-between align-items-center mb-3" role="alert">
+        <div class="ws-banner @(feedbackIsError ? "ws-banner-error" : "ws-banner-success") d-flex justify-content-between align-items-center mb-3" role="alert">
             <span>@feedbackMessage</span>
-            <button type="button" class="btn-close btn-sm" @onclick="() => feedbackMessage = string.Empty"></button>
+            <button type="button" class="ws-icon-btn" @onclick="() => feedbackMessage = string.Empty">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
         </div>
     }
 
@@ -101,11 +113,11 @@
                         </div>
                         <div class="col-6 col-md-4">
                             <label class="form-label form-label-sm mb-1">Modo de Datos</label>
-                            <div class="btn-group btn-group-sm w-100">
-                                <button type="button" class="btn @(globalSnapshot.Oficiales ? "btn-primary" : "btn-outline-secondary")" @onclick="() => SetOficiales(true)">
+                            <div class="ws-seg-group w-100">
+                                <button type="button" class="ws-seg-btn @(globalSnapshot.Oficiales ? "active" : "")" @onclick="() => SetOficiales(true)">
                                     Oficiales
                                 </button>
-                                <button type="button" class="btn @(!globalSnapshot.Oficiales ? "btn-warning" : "btn-outline-secondary")" @onclick="() => SetOficiales(false)">
+                                <button type="button" class="ws-seg-btn @(!globalSnapshot.Oficiales ? "active-amber" : "")" @onclick="() => SetOficiales(false)">
                                     Sondeo
                                 </button>
                             </div>
@@ -147,15 +159,15 @@
                         </div>
                         <div class="col-6">
                             <label class="form-label form-label-sm mb-1">Intervalo (2 - 60 seg)</label>
-                            <input type="number" min="2" max="60" class="form-control form-control-sm" value="@globalSnapshot.AutoRefreshIntervalSeconds" @onchange="OnAutoRefreshIntervalChanged" />
+                            <input type="number" min="2" max="60" class="form-control form-control-sm ws-num" value="@globalSnapshot.AutoRefreshIntervalSeconds" @onchange="OnAutoRefreshIntervalChanged" />
                         </div>
                         <div class="col-12 mt-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                            <div class="small text-muted">
+                            <div class="small text-muted ws-mono">
                                 <div><strong>Última comprobación:</strong> @(globalSnapshot.LastAutoRefreshCheckUtc?.ToLocalTime().ToString("HH:mm:ss") ?? "-")</div>
                                 <div><strong>Última actualización:</strong> @(globalSnapshot.LastAutoRefreshAppliedUtc?.ToLocalTime().ToString("HH:mm:ss") ?? "-")</div>
-                                <div><strong>Estado:</strong> @(string.IsNullOrWhiteSpace(globalSnapshot.LastAutoRefreshStatus) ? "-" : globalSnapshot.LastAutoRefreshStatus)</div>
+                                <div class="font-sans"><strong>Estado:</strong> @(string.IsNullOrWhiteSpace(globalSnapshot.LastAutoRefreshStatus) ? "-" : globalSnapshot.LastAutoRefreshStatus)</div>
                             </div>
-                            <button type="button" class="btn btn-sm btn-outline-primary" @onclick="CheckDatabaseChangesNowAsync" disabled="@checkingDbChanges">
+                            <button type="button" class="ws-btn ws-btn-primary-outline ws-btn-xs" @onclick="CheckDatabaseChangesNowAsync" disabled="@checkingDbChanges">
                                 @(checkingDbChanges ? "Comprobando..." : "Comprobar BD ahora")
                             </button>
                         </div>
@@ -170,40 +182,38 @@
                 var state = StateService.GetState(module);
                 var lockInfo = GetModuleLockInfo(module);
                 <div class="col-12 col-md-6">
-                    <div class="ws-panel @(state.IsOnAir ? "border-success" : "")">
+                    <div class="ws-panel @(state.IsOnAir ? "ws-panel-live" : "")">
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="ws-control-group-title mb-0">Supervisión @(module == GraphicModule.Faldon ? "FALDÓN" : "CARTÓN")</span>
                             <span class="ws-onair-pill @(state.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
-                                @(state.IsOnAir ? "● EN AIRE" : "○ FUERA DE AIRE")
+                                <span class="ws-tally-dot"></span> @(state.IsOnAir ? "EN AIRE" : "FUERA DE AIRE")
                             </span>
                         </div>
-                        <div class="row g-2 small mb-3">
-                            <div class="col-6">
-                                <span class="text-muted">Escena activa:</span>
-                                <div class="fw-bold">@(string.IsNullOrWhiteSpace(state.ActiveScene) ? "-" : state.ActiveScene)</div>
+                        <div class="ws-kpi-grid mb-3">
+                            <div class="ws-kpi-item">
+                                <div class="ws-kpi-label">Escena activa</div>
+                                <div class="ws-kpi-value">@(string.IsNullOrWhiteSpace(state.ActiveScene) ? "-" : state.ActiveScene)</div>
                             </div>
-                            <div class="col-6">
-                                <span class="text-muted">Bloqueo (Lock):</span>
-                                <div class="fw-bold">
-                                    @(lockInfo.IsLocked ? lockInfo.Owner : "Libre")
-                                </div>
+                            <div class="ws-kpi-item">
+                                <div class="ws-kpi-label">Bloqueo (Lock)</div>
+                                <div class="ws-kpi-value">@(lockInfo.IsLocked ? lockInfo.Owner : "Libre")</div>
                             </div>
-                            <div class="col-6">
-                                <span class="text-muted">Último operador:</span>
-                                <div>@(string.IsNullOrWhiteSpace(state.LastOperatorId) ? "-" : state.LastOperatorId)</div>
+                            <div class="ws-kpi-item">
+                                <div class="ws-kpi-label">Último operador</div>
+                                <div class="ws-kpi-value">@(string.IsNullOrWhiteSpace(state.LastOperatorId) ? "-" : state.LastOperatorId)</div>
                             </div>
-                            <div class="col-6">
-                                <span class="text-muted">Sede / Vídeos:</span>
-                                <div>
+                            <div class="ws-kpi-item">
+                                <div class="ws-kpi-label">Sede / Vídeos</div>
+                                <div class="ws-kpi-value">
                                     Sede: @(state.IsSedeExpanding ? "Sí" : "No") · Vídeos: @(state.ExpandedVideos.Count == 0 ? "-" : string.Join(", ", state.ExpandedVideos))
                                 </div>
                             </div>
                         </div>
                         <div class="d-flex gap-2">
-                            <button type="button" class="btn btn-sm btn-outline-warning" @onclick="() => ForceUnlockModule(module)" disabled="@(!lockInfo.IsLocked)">
+                            <button type="button" class="ws-btn ws-btn-amber-outline" @onclick="() => ForceUnlockModule(module)" disabled="@(!lockInfo.IsLocked)">
                                 Forzar Desbloqueo
                             </button>
-                            <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => ResetModuleAsync(module)">
+                            <button type="button" class="ws-btn ws-btn-danger-outline" @onclick="() => ResetModuleAsync(module)">
                                 Reset Módulo
                             </button>
                         </div>
@@ -223,7 +233,7 @@
                         <label for="sendIpf2WithIpf" class="form-check-label small">Duplicar envíos IPF hacia IPF2</label>
                     </div>
 
-                    <div class="border rounded p-2 mb-2">
+                    <div class="ws-subcard mb-2">
                         <div class="d-flex justify-content-between align-items-center mb-1">
                             <strong class="small">IPF Principal</strong>
                             <div class="form-check form-switch mb-0">
@@ -247,7 +257,7 @@
                         </div>
                     </div>
 
-                    <div class="border rounded p-2 mb-2">
+                    <div class="ws-subcard mb-2">
                         <div class="d-flex justify-content-between align-items-center mb-1">
                             <strong class="small">PRIME</strong>
                             <div class="form-check form-switch mb-0">
@@ -271,7 +281,7 @@
                         </div>
                     </div>
 
-                    <div class="border rounded p-2 mb-2">
+                    <div class="ws-subcard mb-2">
                         <div class="d-flex justify-content-between align-items-center mb-1">
                             <strong class="small">IPF2 (Secundario)</strong>
                             <div class="form-check form-switch mb-0">
@@ -296,10 +306,10 @@
                     </div>
 
                     <div class="d-flex gap-2 mt-2">
-                        <button type="button" class="btn btn-sm btn-primary" @onclick="SaveConfigAsync" disabled="@saving">
+                        <button type="button" class="ws-btn ws-btn-primary" @onclick="SaveConfigAsync" disabled="@saving">
                             @(saving ? "Guardando..." : "Guardar Configuración")
                         </button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CheckConnectivityAsync" disabled="@checkingConnectivity">
+                        <button type="button" class="ws-btn ws-btn-primary-outline" @onclick="CheckConnectivityAsync" disabled="@checkingConnectivity">
                             @(checkingConnectivity ? "Comprobando..." : "Comprobar Conexiones")
                         </button>
                     </div>
@@ -309,7 +319,7 @@
                         <div class="mt-2 d-flex flex-wrap gap-2">
                             @foreach (var status in connectivityStatuses)
                             {
-                                <span class="badge @(!status.Enabled ? "bg-secondary" : status.Reachable ? "bg-success" : "bg-danger")">
+                                <span class="ws-chip @(!status.Enabled ? "" : status.Reachable ? "ws-chip-live" : "ws-chip-danger")">
                                     @status.Name (@status.Host:@status.Port): @status.Message
                                 </span>
                             }
@@ -357,7 +367,7 @@
                     </div>
 
                     <div class="ws-control-group-title">Fuentes de Vídeo (Slots 1-6)</div>
-                    <table class="table table-sm table-striped align-middle mb-0">
+                    <table class="ws-table w-100 mb-0">
                         <thead>
                             <tr>
                                 <th>Slot</th>
@@ -406,13 +416,13 @@
                     <input class="form-control form-control-sm" placeholder="IPF, Prime..." @bind="targetFilter" />
                 </div>
                 <div class="col-12 col-md-6 d-flex gap-2">
-                    <button type="button" class="btn btn-sm btn-outline-primary" @onclick="RefreshDiagnostics">Refrescar</button>
-                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="ClearDiagnostics">Limpiar Consola</button>
+                    <button type="button" class="ws-btn ws-btn-primary-outline" @onclick="RefreshDiagnostics">Refrescar</button>
+                    <button type="button" class="ws-btn ws-btn-danger-outline" @onclick="ClearDiagnostics">Limpiar Consola</button>
                 </div>
             </div>
 
-            <div class="table-responsive" style="max-height: calc(100vh - 220px); overflow-y: auto;">
-                <table class="table table-sm table-striped align-middle mb-0">
+            <div class="ws-diag-scroll">
+                <table class="ws-table w-100 mb-0">
                     <thead>
                         <tr>
                             <th>Hora (UTC)</th>
@@ -424,25 +434,34 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var entry in FilteredEntries)
+                        @if (FilteredEntries.Any())
+                        {
+                            @foreach (var entry in FilteredEntries)
+                            {
+                                <tr>
+                                    <td class="text-nowrap ws-mono">@entry.TimestampUtc.ToString("HH:mm:ss.fff")</td>
+                                    <td><span class="ws-chip ws-chip-accent">@(entry.Module?.ToString() ?? "-")</span></td>
+                                    <td>@entry.EndpointName</td>
+                                    <td class="ws-mono text-muted">@entry.Host:@entry.Port</td>
+                                    <td>
+                                        <span class="ws-chip @(entry.Delivered ? "ws-chip-live" : "ws-chip-danger")">
+                                            @(entry.Delivered ? "OK" : "ERROR")
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <code>@entry.Payload</code>
+                                        @if (!entry.Delivered && !string.IsNullOrWhiteSpace(entry.StatusMessage))
+                                        {
+                                            <div class="ws-status-msg-error mt-1">@entry.StatusMessage</div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        }
+                        else
                         {
                             <tr>
-                                <td class="text-nowrap small">@entry.TimestampUtc.ToString("HH:mm:ss.fff")</td>
-                                <td><span class="badge bg-info text-dark">@(entry.Module?.ToString() ?? "-")</span></td>
-                                <td>@entry.EndpointName</td>
-                                <td class="small text-muted">@entry.Host:@entry.Port</td>
-                                <td>
-                                    <span class="badge @(entry.Delivered ? "bg-success" : "bg-danger")">
-                                        @(entry.Delivered ? "OK" : "ERROR")
-                                    </span>
-                                </td>
-                                <td>
-                                    <code class="small">@entry.Payload</code>
-                                    @if (!entry.Delivered && !string.IsNullOrWhiteSpace(entry.StatusMessage))
-                                    {
-                                        <div class="text-danger small">@entry.StatusMessage</div>
-                                    }
-                                </td>
+                                <td colspan="6" class="text-center text-muted py-4">No hay entradas de diagnóstico para el filtro actual.</td>
                             </tr>
                         }
                     </tbody>
@@ -450,7 +469,7 @@
             </div>
         </div>
     }
-</div>
+</main>
 
 @code {
     private enum ControlTab

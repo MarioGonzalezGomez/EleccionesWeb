@@ -1,56 +1,73 @@
 @using Elecciones.Application.Models
 
-<aside class="ws-party-sidebar">
+<aside class="ws-party-sidebar" aria-label="Listado de partidos y escaños">
     <div class="ws-party-header">
-        <span>Partidos (@Parties.Count)</span>
-        <button class="btn btn-sm btn-link p-0 text-decoration-none"
+        <span>Partidos <span class="ws-num">(@FilteredParties.Count/@Parties.Count)</span></span>
+        <button class="ws-icon-btn"
                 type="button"
                 title="Refrescar partidos"
+                aria-label="Refrescar partidos"
                 @onclick="OnRefreshClicked"
                 disabled="@Loading">
-            @(Loading ? "..." : "↻")
+            <svg class="@(Loading ? "ws-spin" : null)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8" />
+                <path d="M21 3v5h-5" />
+            </svg>
         </button>
     </div>
 
-    <div class="table-responsive" style="max-height: calc(100vh - 115px); overflow-y: auto;">
-        <table class="table table-sm align-middle mb-0">
-            <thead class="table-light">
+    <div class="ws-party-filter">
+        <input type="search"
+               class="form-control form-control-sm"
+               placeholder="Filtrar siglas o código..."
+               aria-label="Filtrar partidos"
+               @bind="searchTerm"
+               @bind:event="oninput" />
+    </div>
+
+    <div class="ws-party-scroll">
+        <table class="ws-table">
+            <thead>
                 <tr>
-                    <th class="ps-3">Siglas</th>
-                    <th class="text-end pe-3">Esc</th>
+                    <th>Siglas</th>
+                    <th class="text-end">Escaños</th>
                 </tr>
             </thead>
             <tbody>
-                @if (Parties.Count == 0)
+                @if (FilteredParties.Count == 0)
                 {
                     <tr>
-                        <td colspan="2" class="text-center text-muted small py-3">Sin datos</td>
+                        <td colspan="2" class="text-center text-muted py-4">
+                            @(Parties.Count == 0 ? "Sin datos disponibles" : "Sin coincidencias")
+                        </td>
                     </tr>
                 }
                 else
                 {
-                    @foreach (var party in Parties)
+                    @foreach (var party in FilteredParties)
                     {
                         var isSelected = string.Equals(SelectedPartyCode, party.Codigo, StringComparison.OrdinalIgnoreCase);
                         var escanos = Oficiales ? party.Escanios : party.EscaniosHastaSondeo;
-                        <tr class="ws-party-row @(isSelected ? "table-primary fw-semibold" : null)"
+                        <tr class="ws-party-row @(isSelected ? "selected" : null)"
                             @onclick="() => OnPartySelected.InvokeAsync(party)"
                             @ondblclick="() => OnPartyDoubleClicked.InvokeAsync(party)">
-                            <td class="ps-3">
-                                <span>@party.Siglas</span>
-                                @if (ShowUltimoIndicators && party.EsUltimoEscano != 0)
-                                {
-                                    <span class="badge bg-warning text-dark ms-1" title="Último escaño">ÚLT</span>
-                                }
-                                else if (ShowUltimoIndicators && party.LuchaUltimoEscano != 0)
-                                {
-                                    <span class="badge bg-info text-dark ms-1" title="En lucha">R</span>
-                                }
+                            <td>
+                                <div class="d-flex align-items-center gap-1 flex-wrap">
+                                    <span>@party.Siglas</span>
+                                    @if (ShowUltimoIndicators && party.EsUltimoEscano != 0)
+                                    {
+                                        <span class="ws-chip ws-chip-amber py-0 px-1" title="Último escaño adjudicado">ÚLT</span>
+                                    }
+                                    else if (ShowUltimoIndicators && party.LuchaUltimoEscano != 0)
+                                    {
+                                        <span class="ws-chip ws-chip-accent py-0 px-1" title="En disputa por el último escaño">DISPUTA</span>
+                                    }
+                                </div>
                             </td>
-                            <td class="text-end pe-3 font-monospace">
+                            <td class="text-end ws-mono">
                                 @if (!Oficiales && party.EscaniosDesdeSondeo != party.EscaniosHastaSondeo && party.EscaniosDesdeSondeo > 0)
                                 {
-                                    <span class="text-muted small">@party.EscaniosDesdeSondeo-</span>@party.EscaniosHastaSondeo
+                                    <span class="text-muted">@party.EscaniosDesdeSondeo–</span>@party.EscaniosHastaSondeo
                                 }
                                 else
                                 {
@@ -66,6 +83,8 @@
 </aside>
 
 @code {
+    private string searchTerm = string.Empty;
+
     [Parameter] public IReadOnlyList<PartidoSnapshot> Parties { get; set; } = [];
     [Parameter] public string SelectedPartyCode { get; set; } = string.Empty;
     [Parameter] public bool Oficiales { get; set; }
@@ -74,5 +93,11 @@
     [Parameter] public EventCallback<PartidoSnapshot> OnPartySelected { get; set; }
     [Parameter] public EventCallback<PartidoSnapshot> OnPartyDoubleClicked { get; set; }
     [Parameter] public EventCallback OnRefreshClicked { get; set; }
-}
 
+    private IReadOnlyList<PartidoSnapshot> FilteredParties => string.IsNullOrWhiteSpace(searchTerm)
+        ? Parties
+        : Parties
+            .Where(p => p.Siglas.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase)
+                     || p.Codigo.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+}

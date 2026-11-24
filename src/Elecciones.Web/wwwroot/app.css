@@ -1,59 +1,489 @@
-html, body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    background-color: #f4f6f9;
-    color: #1e293b;
-    margin: 0;
-    padding: 0;
+/* ==========================================================================
+   EleccionesWeb · Precision Broadcast UI Design System
+   Inspiración: Linear / Vercel / Consolas MCR de Realización en Directo
+   ========================================================================== */
+
+:root,
+[data-theme="dark"] {
+    color-scheme: dark;
+
+    /* Superficies escalonadas (pizarra/carbón técnico, cero negro puro #000) */
+    --bg-canvas: #0a0d12;
+    --bg-topbar: #0e1219;
+    --bg-surface: #121721;
+    --bg-elevated: #171e2b;
+    --bg-subtle: #1b2332;
+    --bg-hover: #212b3d;
+    --bg-active: #28354b;
+    --bg-input: #0e131c;
+
+    /* Bordes de precisión 1px */
+    --border-subtle: rgba(255, 255, 255, 0.07);
+    --border-default: rgba(255, 255, 255, 0.12);
+    --border-strong: rgba(255, 255, 255, 0.22);
+
+    /* Jerarquía tipográfica */
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --text-inverse: #090d14;
+
+    /* Acento técnico (Azul precisión / Datos Oficiales) */
+    --accent-primary: #3b82f6;
+    --accent-hover: #2563eb;
+    --accent-soft: rgba(59, 130, 246, 0.15);
+    --accent-border: rgba(59, 130, 246, 0.42);
+    --accent-text: #93c5fd;
+
+    /* Estados operativos Broadcast (Tally) */
+    --status-live: #10b981;
+    --status-live-hover: #059669;
+    --status-live-soft: rgba(16, 185, 129, 0.15);
+    --status-live-border: rgba(16, 185, 129, 0.42);
+    --status-live-text: #6ee7b7;
+
+    --status-ready: #f59e0b;
+    --status-ready-hover: #d97706;
+    --status-ready-soft: rgba(245, 158, 11, 0.15);
+    --status-ready-border: rgba(245, 158, 11, 0.42);
+    --status-ready-text: #fcd34d;
+
+    --status-warning: #f59e0b;
+    --status-danger: #ef4444;
+    --status-danger-hover: #dc2626;
+    --status-danger-soft: rgba(239, 68, 68, 0.15);
+    --status-danger-border: rgba(239, 68, 68, 0.42);
+    --status-danger-text: #fca5a5;
+
+    /* Radios y sombras contenidas */
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 10px;
+    --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.42);
+    --focus-ring: 0 0 0 2px rgba(59, 130, 246, 0.45);
+
+    /* Tipografía */
+    --font-sans: "Inter", "Segoe UI Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+[data-theme="light"] {
+    color-scheme: light;
+
+    --bg-canvas: #f3f5f9;
+    --bg-topbar: #ffffff;
+    --bg-surface: #ffffff;
+    --bg-elevated: #f8fafc;
+    --bg-subtle: #f1f5f9;
+    --bg-hover: #e8eef5;
+    --bg-active: #dce5f0;
+    --bg-input: #ffffff;
+
+    --border-subtle: rgba(15, 23, 42, 0.08);
+    --border-default: rgba(15, 23, 42, 0.14);
+    --border-strong: rgba(15, 23, 42, 0.26);
+
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #64748b;
+    --text-inverse: #ffffff;
+
+    --accent-primary: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-soft: rgba(37, 99, 235, 0.10);
+    --accent-border: rgba(37, 99, 235, 0.34);
+    --accent-text: #1d4ed8;
+
+    --status-live: #059669;
+    --status-live-hover: #047857;
+    --status-live-soft: rgba(5, 150, 105, 0.11);
+    --status-live-border: rgba(5, 150, 105, 0.35);
+    --status-live-text: #047857;
+
+    --status-ready: #d97706;
+    --status-ready-hover: #b45309;
+    --status-ready-soft: rgba(217, 119, 6, 0.11);
+    --status-ready-border: rgba(217, 119, 6, 0.35);
+    --status-ready-text: #b45309;
+
+    --status-warning: #d97706;
+    --status-danger: #dc2626;
+    --status-danger-hover: #b91c1c;
+    --status-danger-soft: rgba(220, 38, 38, 0.10);
+    --status-danger-border: rgba(220, 38, 38, 0.34);
+    --status-danger-text: #b91c1c;
+
+    --shadow-panel: 0 1px 2px rgba(15, 23, 42, 0.05);
+    --shadow-elevated: 0 10px 28px rgba(15, 23, 42, 0.09);
+    --focus-ring: 0 0 0 2px rgba(37, 99, 235, 0.32);
+}
+
+/* ==========================================================================
+   Base y Tipografía Numérica Tabular
+   ========================================================================== */
+
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+
+html, body {
+    font-family: var(--font-sans);
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    margin: 0;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+}
+
+.ws-num,
+.ws-mono,
+code,
+input[type="number"],
+.ws-table td,
+.ws-onair-pill,
+.ws-chip {
+    font-variant-numeric: tabular-nums;
+}
+
+.ws-mono, code {
+    font-family: var(--font-mono);
+}
+
+code {
+    color: var(--accent-text);
+    background: var(--accent-soft);
+    padding: 0.12rem 0.38rem;
+    border-radius: 4px;
+    font-size: 0.82rem;
+}
+
+:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+/* ==========================================================================
+   Adaptación de Controles Bootstrap al Sistema de Tokens
+   ========================================================================== */
+
+.workspace-shell .form-label,
+.ws-auth-page .form-label {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 500;
+    margin-bottom: 0.28rem;
+}
+
+.workspace-shell .form-control,
+.workspace-shell .form-select,
+.ws-auth-page .form-control,
+.ws-auth-page .form-select {
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    transition: border-color 140ms cubic-bezier(0.2, 0, 0, 1), box-shadow 140ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.workspace-shell .form-select {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%2394a3b8' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.75' d='m4 6 4 4 4-4'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 0.55rem center;
+    background-size: 14px 14px;
+}
+
+.workspace-shell .form-control::placeholder {
+    color: var(--text-muted);
+}
+
+.workspace-shell .form-control:hover,
+.workspace-shell .form-select:hover {
+    border-color: var(--border-strong);
+}
+
+.workspace-shell .form-control:focus,
+.workspace-shell .form-select:focus {
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+    box-shadow: var(--focus-ring);
+}
+
+.workspace-shell .form-check-input {
+    background-color: var(--bg-input);
+    border-color: var(--border-strong);
+    cursor: pointer;
+}
+
+.workspace-shell .form-check-input:checked {
+    background-color: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+
+.workspace-shell .form-check-label {
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.workspace-shell .text-muted {
+    color: var(--text-muted) !important;
+}
+
+.workspace-shell .text-dark {
+    color: var(--text-primary) !important;
+}
+
+/* ==========================================================================
+   Topbar de Consola y Navegación Rápida
+   ========================================================================== */
+
 .ws-topbar {
-    background-color: #0f172a;
-    color: #f8fafc;
+    background-color: var(--bg-topbar);
+    color: var(--text-primary);
     padding: 0.5rem 1rem;
+    min-height: 52px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    gap: 0.75rem 1rem;
     flex-wrap: wrap;
-    border-bottom: 2px solid #1e293b;
+    border-bottom: 1px solid var(--border-subtle);
+    position: sticky;
+    top: 0;
+    z-index: 100;
 }
 
-.ws-badge-title {
-    font-weight: 700;
-    font-size: 0.95rem;
-    letter-spacing: 0.04em;
-    padding: 0.25rem 0.65rem;
-    border-radius: 0.35rem;
-    background-color: #1e293b;
-    color: #e2e8f0;
-    text-transform: uppercase;
+.ws-topbar-cluster {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
 }
+
+.ws-brand-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    font-size: 0.88rem;
+    letter-spacing: 0.02em;
+    padding: 0.28rem 0.65rem;
+    border-radius: var(--radius-sm);
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    color: var(--text-primary);
+}
+
+.ws-brand-mark svg {
+    color: var(--accent-primary);
+    flex-shrink: 0;
+}
+
+.ws-inline-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.ws-inline-field label {
+    font-size: 0.76rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin: 0;
+    white-space: nowrap;
+}
+
+.ws-select-circ {
+    min-width: 215px;
+}
+
+.ws-select-medio {
+    min-width: 125px;
+}
+
+/* Conmutador rápido entre consolas (Control / Faldón / Cartón) */
+.ws-quicknav {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.ws-nav-seg {
+    display: inline-flex;
+    align-items: center;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+    gap: 2px;
+}
+
+.ws-nav-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.24rem 0.6rem;
+    font-size: 0.76rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-decoration: none;
+    border-radius: 4px;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1), color 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ws-nav-link:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-hover);
+}
+
+.ws-nav-link.active {
+    background-color: var(--bg-active);
+    color: var(--text-primary);
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px var(--border-default);
+}
+
+.ws-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-decoration: none;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1), color 120ms cubic-bezier(0.2, 0, 0, 1), border-color 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ws-icon-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--border-default);
+}
+
+.ws-icon-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+[data-theme="dark"] .ws-theme-icon-moon {
+    display: none;
+}
+
+[data-theme="light"] .ws-theme-icon-sun {
+    display: none;
+}
+
+/* ==========================================================================
+   Indicadores Tally (EN AIRE / FUERA) y Chips Semánticos
+   ========================================================================== */
 
 .ws-onair-pill {
-    font-weight: 700;
-    font-size: 0.82rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    font-weight: 600;
+    font-size: 0.76rem;
     padding: 0.25rem 0.65rem;
     border-radius: 999px;
     letter-spacing: 0.03em;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+    white-space: nowrap;
+}
+
+.ws-tally-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
 }
 
 .ws-onair-active {
-    background-color: #16a34a;
-    color: #ffffff;
-    box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.35);
+    background-color: var(--status-live-soft);
+    color: var(--status-live-text);
+    border-color: var(--status-live-border);
+}
+
+.ws-onair-active .ws-tally-dot {
+    background-color: var(--status-live);
+    box-shadow: 0 0 8px var(--status-live);
 }
 
 .ws-onair-idle {
-    background-color: #334155;
-    color: #cbd5e1;
+    background-color: var(--bg-elevated);
+    color: var(--text-secondary);
+    border-color: var(--border-subtle);
+}
+
+.ws-onair-idle .ws-tally-dot {
+    background-color: var(--text-muted);
+}
+
+.ws-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.22rem 0.55rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    background-color: var(--bg-elevated);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.ws-chip-accent {
+    background-color: var(--accent-soft);
+    border-color: var(--accent-border);
+    color: var(--accent-text);
+}
+
+.ws-chip-live {
+    background-color: var(--status-live-soft);
+    border-color: var(--status-live-border);
+    color: var(--status-live-text);
+}
+
+.ws-chip-amber {
+    background-color: var(--status-ready-soft);
+    border-color: var(--status-ready-border);
+    color: var(--status-ready-text);
+}
+
+.ws-chip-danger {
+    background-color: var(--status-danger-soft);
+    border-color: var(--status-danger-border);
+    color: var(--status-danger-text);
+}
+
+/* ==========================================================================
+   Estructura Principal, Paneles y Subtarjetas
+   ========================================================================== */
+
+.ws-main-container {
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
 }
 
 .ws-body {
     flex: 1;
     display: grid;
-    grid-template-columns: 1fr 270px;
+    grid-template-columns: minmax(0, 1fr) 290px;
     gap: 0.85rem;
-    padding: 0.85rem 1rem;
+    padding: 1rem;
     align-items: start;
 }
 
@@ -64,94 +494,521 @@ html, body {
 }
 
 .ws-panel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.5rem;
-    padding: 0.85rem 1rem;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 1rem;
+    box-shadow: var(--shadow-panel);
 }
 
-.ws-tabs {
+.ws-panel-live {
+    border-color: var(--status-live-border);
+    box-shadow: inset 0 1px 0 var(--status-live-soft), var(--shadow-panel);
+}
+
+.ws-subcard {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 0.85rem;
+}
+
+.ws-control-group-title {
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 0.65rem;
+}
+
+.ws-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+}
+
+.ws-kpi-item {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.65rem;
+}
+
+.ws-kpi-label {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-bottom: 0.15rem;
+}
+
+.ws-kpi-value {
+    font-size: 0.86rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* ==========================================================================
+   Pestañas (Tabs) y Controles Segmentados
+   ========================================================================== */
+
+.ws-tabs {
+    display: inline-flex;
     flex-wrap: wrap;
-    gap: 0.4rem;
+    gap: 3px;
+    padding: 3px;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
     margin-bottom: 0.85rem;
 }
 
 .ws-tab-btn {
-    font-weight: 600;
-    font-size: 0.88rem;
-    padding: 0.45rem 0.85rem;
-    border-radius: 0.375rem;
-    border: 1px solid #cbd5e1;
-    background-color: #f8fafc;
-    color: #334155;
-    transition: all 0.12s ease-in-out;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: 500;
+    font-size: 0.82rem;
+    padding: 0.4rem 0.8rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    background-color: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background-color 130ms cubic-bezier(0.2, 0, 0, 1), color 130ms cubic-bezier(0.2, 0, 0, 1), border-color 130ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .ws-tab-btn:hover {
-    background-color: #e2e8f0;
+    color: var(--text-primary);
+    background-color: var(--bg-hover);
 }
 
 .ws-tab-btn.active {
-    background-color: #0f172a;
-    color: #ffffff;
-    border-color: #0f172a;
+    background-color: var(--bg-surface);
+    color: var(--text-primary);
+    font-weight: 600;
+    border-color: var(--border-default);
+    box-shadow: var(--shadow-panel);
 }
+
+.ws-seg-group {
+    display: flex;
+    padding: 2px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    gap: 2px;
+}
+
+.ws-seg-btn {
+    flex: 1;
+    padding: 0.28rem 0.55rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1), color 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ws-seg-btn:hover {
+    color: var(--text-primary);
+}
+
+.ws-seg-btn.active {
+    background: var(--accent-soft);
+    border-color: var(--accent-border);
+    color: var(--accent-text);
+    font-weight: 600;
+}
+
+.ws-seg-btn.active-amber {
+    background: var(--status-ready-soft);
+    border-color: var(--status-ready-border);
+    color: var(--status-ready-text);
+    font-weight: 600;
+}
+
+/* ==========================================================================
+   Botonera Operativa Broadcast (SceneActionBar + Comandos)
+   ========================================================================== */
 
 .ws-action-bar {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
-    padding: 0.65rem 0.75rem;
-    background-color: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.45rem;
-    margin-bottom: 0.85rem;
+    padding: 0.65rem 0.85rem;
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    margin-bottom: 1rem;
     align-items: center;
 }
 
-.ws-action-btn {
-    font-weight: 700;
-    min-width: 105px;
+.ws-scene-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding-right: 0.65rem;
+    margin-right: 0.25rem;
+    border-right: 1px solid var(--border-default);
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.ws-scene-tag strong {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text-primary);
     letter-spacing: 0.02em;
 }
 
-.ws-party-sidebar {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.5rem;
+.ws-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    font-family: var(--font-sans);
+    font-size: 0.81rem;
+    font-weight: 600;
+    padding: 0.38rem 0.78rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-default);
+    background-color: var(--bg-subtle);
+    color: var(--text-primary);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: background-color 130ms cubic-bezier(0.2, 0, 0, 1), border-color 130ms cubic-bezier(0.2, 0, 0, 1), color 130ms cubic-bezier(0.2, 0, 0, 1), transform 90ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ws-btn:hover:not(:disabled) {
+    background-color: var(--bg-hover);
+    border-color: var(--border-strong);
+}
+
+.ws-btn:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
+.ws-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.ws-action-btn {
+    min-width: 108px;
+    letter-spacing: 0.03em;
+}
+
+/* Variantes semánticas de botones */
+.ws-btn-primary {
+    background-color: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: #ffffff;
+}
+
+.ws-btn-primary:hover:not(:disabled) {
+    background-color: var(--accent-hover);
+    border-color: var(--accent-hover);
+}
+
+.ws-btn-primary-outline {
+    background-color: var(--accent-soft);
+    border-color: var(--accent-border);
+    color: var(--accent-text);
+}
+
+.ws-btn-primary-outline:hover:not(:disabled) {
+    background-color: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: #ffffff;
+}
+
+.ws-btn-live {
+    background-color: var(--status-live);
+    border-color: var(--status-live);
+    color: #ffffff;
+}
+
+.ws-btn-live:hover:not(:disabled) {
+    background-color: var(--status-live-hover);
+    border-color: var(--status-live-hover);
+}
+
+.ws-btn-live-outline {
+    background-color: var(--status-live-soft);
+    border-color: var(--status-live-border);
+    color: var(--status-live-text);
+}
+
+.ws-btn-live-outline:hover:not(:disabled) {
+    background-color: var(--status-live);
+    border-color: var(--status-live);
+    color: #ffffff;
+}
+
+.ws-btn-amber {
+    background-color: var(--status-ready);
+    border-color: var(--status-ready);
+    color: #ffffff;
+}
+
+.ws-btn-amber:hover:not(:disabled) {
+    background-color: var(--status-ready-hover);
+    border-color: var(--status-ready-hover);
+}
+
+.ws-btn-amber-outline {
+    background-color: var(--status-ready-soft);
+    border-color: var(--status-ready-border);
+    color: var(--status-ready-text);
+}
+
+.ws-btn-amber-outline:hover:not(:disabled) {
+    background-color: var(--status-ready);
+    border-color: var(--status-ready);
+    color: #ffffff;
+}
+
+.ws-btn-danger-outline {
+    background-color: transparent;
+    border-color: var(--status-danger-border);
+    color: var(--status-danger-text);
+}
+
+.ws-btn-danger-outline:hover:not(:disabled) {
+    background-color: var(--status-danger);
+    border-color: var(--status-danger);
+    color: #ffffff;
+}
+
+.ws-btn-xs {
+    padding: 0.2rem 0.55rem;
+    font-size: 0.74rem;
+}
+
+/* ==========================================================================
+   Pactómetro y Bloques de Escaños
+   ========================================================================== */
+
+.ws-pact-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
     overflow: hidden;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.85rem;
+}
+
+.ws-pact-fill-left {
+    background-color: var(--status-live);
+    transition: width 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ws-pact-fill-right {
+    background-color: var(--accent-primary);
+    transition: width 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ws-party-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.22rem 0.55rem;
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.ws-party-pill span {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* ==========================================================================
+   Sidebar de Partidos y Tablas de Datos
+   ========================================================================== */
+
+.ws-party-sidebar {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-panel);
+    display: flex;
+    flex-direction: column;
 }
 
 .ws-party-header {
-    background: #f8fafc;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid #e2e8f0;
+    background: var(--bg-elevated);
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid var(--border-subtle);
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 0.82rem;
-    font-weight: 700;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
     text-transform: uppercase;
-    color: #475569;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+}
+
+.ws-party-filter {
+    padding: 0.45rem 0.65rem;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+}
+
+.ws-party-scroll {
+    max-height: calc(100vh - 165px);
+    overflow-y: auto;
+}
+
+.ws-diag-scroll {
+    max-height: calc(100vh - 235px);
+    overflow-y: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+}
+
+.ws-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.83rem;
+    color: var(--text-primary);
+}
+
+.ws-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    font-size: 0.71rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.48rem 0.75rem;
+    border-bottom: 1px solid var(--border-default);
+}
+
+.ws-table tbody td {
+    padding: 0.46rem 0.75rem;
+    border-bottom: 1px solid var(--border-subtle);
+    vertical-align: middle;
+}
+
+.ws-table tbody tr:last-child td {
+    border-bottom: none;
 }
 
 .ws-party-row {
     cursor: pointer;
     user-select: none;
+    transition: background-color 100ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .ws-party-row:hover {
-    background-color: #f1f5f9;
+    background-color: var(--bg-hover);
 }
 
-.ws-control-group-title {
+.ws-party-row.selected {
+    background-color: var(--accent-soft);
+    box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+
+.ws-party-row.selected td {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+/* ==========================================================================
+   Banners de Feedback, Login y Pantallas de Sistema
+   ========================================================================== */
+
+.ws-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.55rem 0.85rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-default);
+    background: var(--bg-elevated);
+    font-size: 0.83rem;
+}
+
+.ws-banner-success {
+    background: var(--status-live-soft);
+    border-color: var(--status-live-border);
+    color: var(--status-live-text);
+}
+
+.ws-banner-error {
+    background: var(--status-danger-soft);
+    border-color: var(--status-danger-border);
+    color: var(--status-danger-text);
+}
+
+.ws-banner-warning {
+    background: var(--status-ready-soft);
+    border-color: var(--status-ready-border);
+    color: var(--status-ready-text);
+}
+
+.ws-auth-page {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+    background: radial-gradient(circle at 50% 0%, var(--accent-soft) 0%, transparent 55%), var(--bg-canvas);
+}
+
+.ws-auth-card {
+    position: relative;
+    width: 100%;
+    max-width: 400px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    padding: 1.75rem;
+    box-shadow: var(--shadow-elevated);
+}
+
+.ws-status-msg-error {
+    color: var(--status-danger-text);
     font-size: 0.78rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: #64748b;
-    margin-bottom: 0.45rem;
+}
+
+.ws-spin {
+    animation: ws-rotate 0.8s linear infinite;
+}
+
+@keyframes ws-rotate {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
 }

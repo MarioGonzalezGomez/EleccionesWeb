@@ -22,28 +22,30 @@
 <PageTitle>Faldón</PageTitle>
 
 <header class="ws-topbar">
-    <div class="d-flex align-items-center gap-2 flex-wrap">
-        <span class="ws-badge-title">Faldón</span>
-        <span class="ws-onair-pill @(moduleState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
-            @(moduleState.IsOnAir
-                ? $"● EN AIRE: {(string.IsNullOrWhiteSpace(moduleState.ActiveScene) ? ActiveSceneName : moduleState.ActiveScene)}"
-                : "○ FUERA DE AIRE")
+    <div class="ws-topbar-cluster">
+        <span class="ws-brand-mark">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18v2h16v-2"/><rect x="4" y="4" width="16" height="10" rx="2"/></svg>
+            Faldón
         </span>
-        <span class="badge bg-secondary">
+        <span class="ws-onair-pill @(moduleState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
+            <span class="ws-tally-dot"></span>
+            @(moduleState.IsOnAir ? $"EN AIRE: {(string.IsNullOrWhiteSpace(moduleState.ActiveScene) ? ActiveSceneName : moduleState.ActiveScene)}" : "FUERA DE AIRE")
+        </span>
+        <span class="ws-chip @(globalSettings.Oficiales ? "ws-chip-accent" : "ws-chip-amber")">
             @(globalSettings.Oficiales ? "OFICIALES" : "SONDEO") · Elección @globalSettings.ElectionSlot
         </span>
         @if (!IsOwner)
         {
-            <button class="btn btn-xs btn-warning py-0 px-2 small fw-semibold" type="button" @onclick="ClaimModuleLock">
+            <button class="ws-btn ws-btn-amber ws-btn-xs" type="button" @onclick="ClaimModuleLock">
                 Tomar control
             </button>
         }
     </div>
 
-    <div class="d-flex align-items-center gap-2 flex-wrap">
-        <div class="d-flex align-items-center gap-1">
-            <label class="small text-light opacity-75 mb-0">Circunscripción:</label>
-            <select class="form-select form-select-sm" style="min-width: 210px;" value="@selectedCircunscripcionCodigo" @onchange="OnCircunscripcionChangedAsync">
+    <div class="ws-topbar-cluster">
+        <div class="ws-inline-field">
+            <label>Circunscripción:</label>
+            <select class="form-select form-select-sm ws-select-circ" value="@selectedCircunscripcionCodigo" @onchange="OnCircunscripcionChangedAsync">
                 @foreach (var circ in circunscripciones)
                 {
                     <option value="@circ.Codigo">@circ.Codigo - @circ.Nombre</option>
@@ -53,9 +55,9 @@
 
         @if (!globalSettings.Oficiales)
         {
-            <div class="d-flex align-items-center gap-1">
-                <label class="small text-light opacity-75 mb-0">Sondeo:</label>
-                <select class="form-select form-select-sm" style="min-width: 120px;" value="@selectedMedioCodigo" @onchange="OnMedioChangedAsync">
+            <div class="ws-inline-field">
+                <label>Sondeo:</label>
+                <select class="form-select form-select-sm ws-select-medio" value="@selectedMedioCodigo" @onchange="OnMedioChangedAsync">
                     @foreach (var medio in medios)
                     {
                         <option value="@medio.Codigo">@medio.Descripcion</option>
@@ -64,17 +66,33 @@
             </div>
         }
 
-        @if (!string.IsNullOrWhiteSpace(feedbackMessage))
-        {
-            <span class="badge @(feedbackIsError ? "bg-danger" : "bg-success") py-1 px-2">
-                @feedbackMessage
-            </span>
-        }
+        <WorkspaceQuickNav Current="WorkspaceKind.Faldon" OperatorId="@operatorId" />
     </div>
 </header>
 
 <div class="ws-body">
-    <section class="ws-panel">
+    <section class="ws-panel @(moduleState.IsOnAir ? "ws-panel-live" : "")">
+        
+        @if (!string.IsNullOrWhiteSpace(feedbackMessage))
+        {
+            <div class="ws-banner @(feedbackIsError ? "ws-banner-error" : "ws-banner-success") mb-3" role="status">
+                <div class="d-flex align-items-center gap-2">
+                    @if (feedbackIsError)
+                    {
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    }
+                    else
+                    {
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    }
+                    <span>@feedbackMessage</span>
+                </div>
+                <button type="button" class="ws-icon-btn" aria-label="Cerrar mensaje" @onclick="() => feedbackMessage = string.Empty">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+        }
+
         <div class="ws-tabs">
             @foreach (var mode in Enum.GetValues<FaldonMode>())
             {
@@ -95,20 +113,24 @@
             case FaldonMode.General:
                 <div class="row g-3">
                     <div class="col-12 col-md-7">
-                        <div class="ws-control-group-title">Transiciones y Animación</div>
-                        <div class="d-flex flex-wrap gap-2">
-                            <button class="btn btn-sm btn-outline-success" @onclick="() => RunCommandAsync(GraphicCommand.PrimerosResultadosActiva)" disabled="@(!CanExecute)">Primeros ON</button>
-                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => RunCommandAsync(GraphicCommand.PrimerosResultadosDesactiva)" disabled="@(!CanExecute)">Primeros OFF</button>
-                            <button class="btn btn-sm btn-outline-primary" @onclick="() => RunCommandAsync(GraphicCommand.AnimacionSondeoActiva)" disabled="@(!CanExecute)">Animación Sondeo ON</button>
-                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => RunCommandAsync(GraphicCommand.AnimacionSondeoDesactiva)" disabled="@(!CanExecute)">Animación Sondeo OFF</button>
-                            <button class="btn btn-sm btn-warning" @onclick="() => RunCommandAsync(GraphicCommand.DeSondeoAOficiales)" disabled="@(!CanExecute)">De Sondeo a Oficiales</button>
+                        <div class="ws-subcard">
+                            <div class="ws-control-group-title">Transiciones y Animación</div>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button class="ws-btn ws-btn-live-outline" @onclick="() => RunCommandAsync(GraphicCommand.PrimerosResultadosActiva)" disabled="@(!CanExecute)">Primeros ON</button>
+                                <button class="ws-btn ws-btn-amber-outline" @onclick="() => RunCommandAsync(GraphicCommand.PrimerosResultadosDesactiva)" disabled="@(!CanExecute)">Primeros OFF</button>
+                                <button class="ws-btn ws-btn-primary-outline" @onclick="() => RunCommandAsync(GraphicCommand.AnimacionSondeoActiva)" disabled="@(!CanExecute)">Animación Sondeo ON</button>
+                                <button class="ws-btn ws-btn-amber-outline" @onclick="() => RunCommandAsync(GraphicCommand.AnimacionSondeoDesactiva)" disabled="@(!CanExecute)">Animación Sondeo OFF</button>
+                                <button class="ws-btn ws-btn-amber" @onclick="() => RunCommandAsync(GraphicCommand.DeSondeoAOficiales)" disabled="@(!CanExecute)">De Sondeo a Oficiales</button>
+                            </div>
                         </div>
                     </div>
                     <div class="col-12 col-md-5">
-                        <div class="ws-control-group-title">Ámbito de Elecciones</div>
-                        <div class="d-flex flex-wrap gap-2">
-                            <button class="btn btn-sm btn-outline-dark" @onclick="() => RunCommandAsync(GraphicCommand.CambioEleccionesNacional)" disabled="@(!CanExecute)">Elecciones Nacional</button>
-                            <button class="btn btn-sm btn-outline-dark" @onclick="() => RunCommandAsync(GraphicCommand.CambioEleccionesEuropa)" disabled="@(!CanExecute)">Elecciones Europa</button>
+                        <div class="ws-subcard h-100">
+                            <div class="ws-control-group-title">Ámbito de Elecciones</div>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button class="ws-btn" @onclick="() => RunCommandAsync(GraphicCommand.CambioEleccionesNacional)" disabled="@(!CanExecute)">Elecciones Nacional</button>
+                                <button class="ws-btn" @onclick="() => RunCommandAsync(GraphicCommand.CambioEleccionesEuropa)" disabled="@(!CanExecute)">Elecciones Europa</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -117,39 +139,47 @@
             case FaldonMode.Ticker:
                 <div class="row g-3">
                     <div class="col-12 col-md-3">
-                        <div class="ws-control-group-title">Ticker Votos</div>
-                        <div class="d-flex gap-2">
-                            <button class="btn btn-sm btn-success flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerVotosEntra)" disabled="@(!CanExecute)">Entra</button>
-                            <button class="btn btn-sm btn-warning flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerVotosSale)" disabled="@(!CanExecute)">Sale</button>
+                        <div class="ws-subcard h-100">
+                            <div class="ws-control-group-title">Ticker Votos</div>
+                            <div class="d-flex gap-2">
+                                <button class="ws-btn ws-btn-live flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerVotosEntra)" disabled="@(!CanExecute)">Entra</button>
+                                <button class="ws-btn ws-btn-amber flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerVotosSale)" disabled="@(!CanExecute)">Sale</button>
+                            </div>
                         </div>
                     </div>
                     <div class="col-12 col-md-3">
-                        <div class="ws-control-group-title">Ticker Históricos</div>
-                        <div class="d-flex gap-2">
-                            <button class="btn btn-sm btn-success flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerHistoricosEntra)" disabled="@(!CanExecute)">Entra</button>
-                            <button class="btn btn-sm btn-warning flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerHistoricosSale)" disabled="@(!CanExecute)">Sale</button>
+                        <div class="ws-subcard h-100">
+                            <div class="ws-control-group-title">Ticker Históricos</div>
+                            <div class="d-flex gap-2">
+                                <button class="ws-btn ws-btn-live flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerHistoricosEntra)" disabled="@(!CanExecute)">Entra</button>
+                                <button class="ws-btn ws-btn-amber flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerHistoricosSale)" disabled="@(!CanExecute)">Sale</button>
+                            </div>
                         </div>
                     </div>
                     <div class="col-12 col-md-3">
-                        <div class="ws-control-group-title">Ticker Fotos</div>
-                        <div class="d-flex gap-2">
-                            <button class="btn btn-sm btn-success flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerFotosEntra)" disabled="@(!CanExecute)">Entra</button>
-                            <button class="btn btn-sm btn-warning flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerFotosSale)" disabled="@(!CanExecute)">Sale</button>
+                        <div class="ws-subcard h-100">
+                            <div class="ws-control-group-title">Ticker Fotos</div>
+                            <div class="d-flex gap-2">
+                                <button class="ws-btn ws-btn-live flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerFotosEntra)" disabled="@(!CanExecute)">Entra</button>
+                                <button class="ws-btn ws-btn-amber flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerFotosSale)" disabled="@(!CanExecute)">Sale</button>
+                            </div>
                         </div>
                     </div>
                     <div class="col-12 col-md-3">
-                        <div class="ws-control-group-title">Ticker TD</div>
-                        <div class="d-flex gap-2">
-                            <button class="btn btn-sm btn-success" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDEntra)" disabled="@(!CanExecute)">Entra</button>
-                            <button class="btn btn-sm btn-primary" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDActualiza)" disabled="@(!CanExecute)">Actualiza</button>
-                            <button class="btn btn-sm btn-warning" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDSale)" disabled="@(!CanExecute)">Sale</button>
+                        <div class="ws-subcard h-100">
+                            <div class="ws-control-group-title">Ticker TD</div>
+                            <div class="d-flex gap-2 flex-wrap">
+                                <button class="ws-btn ws-btn-live flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDEntra)" disabled="@(!CanExecute)">Entra</button>
+                                <button class="ws-btn ws-btn-primary flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDActualiza)" disabled="@(!CanExecute)">Actualiza</button>
+                                <button class="ws-btn ws-btn-amber flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDSale)" disabled="@(!CanExecute)">Sale</button>
+                            </div>
                         </div>
                     </div>
                 </div>
                 break;
 
             case FaldonMode.Sedes:
-                <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+                <div class="ws-subcard d-flex align-items-center justify-content-between flex-wrap gap-3">
                     <div>
                         <div class="ws-control-group-title">Partido en Sede (selección lateral o doble clic)</div>
                         <div class="fw-semibold">
@@ -159,17 +189,17 @@
                         </div>
                     </div>
                     <div class="d-flex flex-wrap gap-2">
-                        <button class="btn btn-sm btn-success"
+                        <button class="ws-btn ws-btn-live"
                                 @onclick="() => RunPartyCommandAsync(GraphicCommand.SedesEntra)"
                                 disabled="@(!CanExecute || SelectedParty is null)">
                             Sedes Entra
                         </button>
-                        <button class="btn btn-sm btn-primary"
+                        <button class="ws-btn ws-btn-primary"
                                 @onclick="() => RunPartyCommandAsync(GraphicCommand.SedesEncadena)"
                                 disabled="@(!CanExecute || SelectedParty is null)">
                             Sedes Encadena
                         </button>
-                        <button class="btn btn-sm btn-warning"
+                        <button class="ws-btn ws-btn-amber"
                                 @onclick="() => RunCommandAsync(GraphicCommand.SedesSale)"
                                 disabled="@(!CanExecute)">
                             Sedes Sale
@@ -181,78 +211,89 @@
             case FaldonMode.VideoPrime:
                 <div class="row g-3">
                     <div class="col-12 col-md-7">
-                        <div class="ws-control-group-title">Control de Vídeo</div>
-                        <div class="row g-2 align-items-center mb-2">
-                            <div class="col-auto">
-                                <select class="form-select form-select-sm" @bind="videoSelectionMode">
-                                    <option value="party">Por partido (tabla lateral)</option>
-                                    <option value="slot">Por fuente de vídeo (Slots 1-6)</option>
-                                </select>
-                            </div>
-                            @if (videoSelectionMode == "slot")
-                            {
-                                <div class="col">
-                                    <select class="form-select form-select-sm" @bind="selectedVideoSlot">
-                                        @foreach (var source in videoSources.OrderBy(x => x.Slot))
-                                        {
-                                            var modeLabel = source.IsLive ? "Directo" : "Pregrabado";
-                                            var pathLabel = string.IsNullOrWhiteSpace(source.Path) ? "(sin ruta)" : source.Path;
-                                            <option value="@source.Slot">@($"Slot {source.Slot} - {modeLabel} - {pathLabel}")</option>
-                                        }
+                        <div class="ws-subcard h-100">
+                            <div class="ws-control-group-title">Control de Vídeo</div>
+                            <div class="row g-2 align-items-center mb-3">
+                                <div class="col-auto">
+                                    <select class="form-select form-select-sm" @bind="videoSelectionMode">
+                                        <option value="party">Por partido (tabla lateral)</option>
+                                        <option value="slot">Por fuente de vídeo (Slots 1-6)</option>
                                     </select>
                                 </div>
-                            }
-                            else
-                            {
-                                <div class="col small text-muted">
-                                    Partido activo: <strong>@(SelectedParty?.Siglas ?? "Ninguno")</strong>
-                                </div>
-                            }
-                        </div>
-                        <div class="d-flex flex-wrap gap-2">
-                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoPrepara)" disabled="@(!CanExecute || !HasVideoTarget)">Prepara</button>
-                            <button class="btn btn-sm btn-success" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoIn)" disabled="@(!CanExecute || !HasVideoTarget)">Video In</button>
-                            <button class="btn btn-sm btn-warning" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOut)" disabled="@(!CanExecute || !HasVideoTarget)">Video Out</button>
-                            <button class="btn btn-sm btn-outline-success" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoInTodos)" disabled="@(!CanExecute)">In Todos</button>
-                            <button class="btn btn-sm btn-outline-warning" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOutTodos)" disabled="@(!CanExecute)">Out Todos</button>
+                                @if (videoSelectionMode == "slot")
+                                {
+                                    <div class="col">
+                                        <select class="form-select form-select-sm" @bind="selectedVideoSlot">
+                                            @foreach (var source in videoSources.OrderBy(x => x.Slot))
+                                            {
+                                                var modeLabel = source.IsLive ? "Directo" : "Pregrabado";
+                                                var pathLabel = string.IsNullOrWhiteSpace(source.Path) ? "(sin ruta)" : source.Path;
+                                                <option value="@source.Slot">@($"Slot {source.Slot} - {modeLabel} - {pathLabel}")</option>
+                                            }
+                                        </select>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="col small text-muted">
+                                        Partido activo: <strong>@(SelectedParty?.Siglas ?? "Ninguno")</strong>
+                                    </div>
+                                }
+                            </div>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button class="ws-btn" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoPrepara)" disabled="@(!CanExecute || !HasVideoTarget)">Prepara</button>
+                                <button class="ws-btn ws-btn-live" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoIn)" disabled="@(!CanExecute || !HasVideoTarget)">Video In</button>
+                                <button class="ws-btn ws-btn-amber" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOut)" disabled="@(!CanExecute || !HasVideoTarget)">Video Out</button>
+                                <button class="ws-btn ws-btn-live-outline" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoInTodos)" disabled="@(!CanExecute)">In Todos</button>
+                                <button class="ws-btn ws-btn-amber-outline" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOutTodos)" disabled="@(!CanExecute)">Out Todos</button>
+                            </div>
                         </div>
                     </div>
 
                     <div class="col-12 col-md-5">
-                        <div class="ws-control-group-title">Rótulos Prime</div>
-                        <div class="d-flex flex-wrap gap-2">
-                            <button class="btn btn-sm btn-success" @onclick="() => RunCommandAsync(GraphicCommand.PrimeSubirRotulosTD)" disabled="@(!CanExecute)">Subir TD</button>
-                            <button class="btn btn-sm btn-warning" @onclick="() => RunCommandAsync(GraphicCommand.PrimeBajarRotulosTD)" disabled="@(!CanExecute)">Bajar TD</button>
-                            <button class="btn btn-sm btn-outline-success" @onclick="() => RunCommandAsync(GraphicCommand.PrimeSubirRotulosEspeciales)" disabled="@(!CanExecute)">Subir Especiales</button>
-                            <button class="btn btn-sm btn-outline-warning" @onclick="() => RunCommandAsync(GraphicCommand.PrimeBajarRotulosEspeciales)" disabled="@(!CanExecute)">Bajar Especiales</button>
+                        <div class="ws-subcard h-100">
+                            <div class="ws-control-group-title">Rótulos Prime</div>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button class="ws-btn ws-btn-live" @onclick="() => RunCommandAsync(GraphicCommand.PrimeSubirRotulosTD)" disabled="@(!CanExecute)">Subir TD</button>
+                                <button class="ws-btn ws-btn-amber" @onclick="() => RunCommandAsync(GraphicCommand.PrimeBajarRotulosTD)" disabled="@(!CanExecute)">Bajar TD</button>
+                                <button class="ws-btn ws-btn-live-outline" @onclick="() => RunCommandAsync(GraphicCommand.PrimeSubirRotulosEspeciales)" disabled="@(!CanExecute)">Subir Especiales</button>
+                                <button class="ws-btn ws-btn-amber-outline" @onclick="() => RunCommandAsync(GraphicCommand.PrimeBajarRotulosEspeciales)" disabled="@(!CanExecute)">Bajar Especiales</button>
+                            </div>
                         </div>
                     </div>
                 </div>
                 break;
 
             case FaldonMode.Pactometro:
-                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-                    <div class="d-flex gap-2">
-                        <button class="btn btn-sm btn-success" @onclick="EnterPactosAsync" disabled="@(!CanExecute)">Pactos Entra</button>
-                        <button class="btn btn-sm btn-outline-secondary" @onclick="ResetPactosAsync" disabled="@(!CanExecute)">Pactos Reinicio</button>
-                        <button class="btn btn-sm btn-warning" @onclick="ExitPactosAsync" disabled="@(!CanExecute)">Pactos Sale</button>
+                <div class="ws-subcard mb-3">
+                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                        <div class="d-flex gap-2">
+                            <button class="ws-btn ws-btn-live" @onclick="EnterPactosAsync" disabled="@(!CanExecute)">Pactos Entra</button>
+                            <button class="ws-btn" @onclick="ResetPactosAsync" disabled="@(!CanExecute)">Pactos Reinicio</button>
+                            <button class="ws-btn ws-btn-amber" @onclick="ExitPactosAsync" disabled="@(!CanExecute)">Pactos Sale</button>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button class="ws-btn ws-btn-live-outline" @onclick="AddLeftAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Izquierda (@(SelectedParty?.Siglas ?? "-"))</button>
+                            <button class="ws-btn ws-btn-amber-outline" @onclick="RemoveLeftAsync" disabled="@(!CanExecute || leftParties.Count == 0)">- Izquierda</button>
+                            <button class="ws-btn ws-btn-primary-outline" @onclick="AddRightAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Derecha (@(SelectedParty?.Siglas ?? "-"))</button>
+                            <button class="ws-btn ws-btn-amber-outline" @onclick="RemoveRightAsync" disabled="@(!CanExecute || rightParties.Count == 0)">- Derecha</button>
+                        </div>
                     </div>
-                    <div class="d-flex gap-2">
-                        <button class="btn btn-sm btn-outline-success" @onclick="AddLeftAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Izquierda (@(SelectedParty?.Siglas ?? "-"))</button>
-                        <button class="btn btn-sm btn-outline-warning" @onclick="RemoveLeftAsync" disabled="@(!CanExecute || leftParties.Count == 0)">- Izquierda</button>
-                        <button class="btn btn-sm btn-outline-primary" @onclick="AddRightAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Derecha (@(SelectedParty?.Siglas ?? "-"))</button>
-                        <button class="btn btn-sm btn-outline-warning" @onclick="RemoveRightAsync" disabled="@(!CanExecute || rightParties.Count == 0)">- Derecha</button>
-                    </div>
+                </div>
+
+                <div class="ws-pact-bar" role="img" aria-label="Proporción de escaños izquierda y derecha">
+                    <div class="ws-pact-fill-left" style="width: @LeftPactPctCss;"></div>
+                    <div class="ws-pact-fill-right" style="width: @RightPactPctCss;"></div>
                 </div>
 
                 <div class="row g-3">
                     <div class="col-12 col-md-6">
-                        <div class="border rounded p-2 bg-light">
-                            <div class="d-flex justify-content-between align-items-center mb-1">
-                                <span class="fw-bold small text-uppercase text-muted">Bloque Izquierda</span>
-                                <span class="badge bg-success fs-6">@leftParties.Sum(GetDisplayEscanos) esc</span>
+                        <div class="ws-subcard h-100">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="ws-control-group-title mb-0">Bloque Izquierda</span>
+                                <span class="ws-chip ws-chip-live ws-num">@LeftPactEscanos esc</span>
                             </div>
-                            <div class="d-flex flex-wrap gap-1">
+                            <div class="d-flex flex-wrap gap-2">
                                 @if (leftParties.Count == 0)
                                 {
                                     <span class="text-muted small">Sin partidos</span>
@@ -261,19 +302,19 @@
                                 {
                                     @foreach (var p in leftParties)
                                     {
-                                        <span class="badge bg-white text-dark border">@p.Siglas (@GetDisplayEscanos(p))</span>
+                                        <span class="ws-party-pill">@p.Siglas <span class="ws-num">(@GetDisplayEscanos(p))</span></span>
                                     }
                                 }
                             </div>
                         </div>
                     </div>
                     <div class="col-12 col-md-6">
-                        <div class="border rounded p-2 bg-light">
-                            <div class="d-flex justify-content-between align-items-center mb-1">
-                                <span class="fw-bold small text-uppercase text-muted">Bloque Derecha</span>
-                                <span class="badge bg-primary fs-6">@rightParties.Sum(GetDisplayEscanos) esc</span>
+                        <div class="ws-subcard h-100">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="ws-control-group-title mb-0">Bloque Derecha</span>
+                                <span class="ws-chip ws-chip-accent ws-num">@RightPactEscanos esc</span>
                             </div>
-                            <div class="d-flex flex-wrap gap-1">
+                            <div class="d-flex flex-wrap gap-2">
                                 @if (rightParties.Count == 0)
                                 {
                                     <span class="text-muted small">Sin partidos</span>
@@ -282,7 +323,7 @@
                                 {
                                     @foreach (var p in rightParties)
                                     {
-                                        <span class="badge bg-white text-dark border">@p.Siglas (@GetDisplayEscanos(p))</span>
+                                        <span class="ws-party-pill">@p.Siglas <span class="ws-num">(@GetDisplayEscanos(p))</span></span>
                                     }
                                 }
                             </div>
@@ -292,9 +333,9 @@
                 break;
 
             case FaldonMode.CuentaAtras:
-                <div class="d-flex align-items-center gap-3">
+                <div class="ws-subcard d-flex align-items-center gap-3">
                     <label class="form-label mb-0 fw-semibold">Segundos de cuenta atrás:</label>
-                    <input class="form-control form-control-sm" style="max-width: 120px;" type="number" min="0" @bind="sceneSeconds" />
+                    <input class="form-control form-control-sm ws-num" style="max-width: 120px;" type="number" min="0" @bind="sceneSeconds" />
                 </div>
                 break;
         }
@@ -635,6 +676,12 @@
 
     private int GetDisplayEscanos(PartidoSnapshot p) => globalSettings.Oficiales ? p.Escanios : p.EscaniosHastaSondeo;
 
+    private int TotalAvailableEscanos => Math.Max(1, availableParties.Sum(GetDisplayEscanos));
+    private int LeftPactEscanos => leftParties.Sum(GetDisplayEscanos);
+    private int RightPactEscanos => rightParties.Sum(GetDisplayEscanos);
+    private string LeftPactPctCss => $"{Math.Clamp(LeftPactEscanos * 100.0 / TotalAvailableEscanos, 0, 100).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%";
+    private string RightPactPctCss => $"{Math.Clamp(RightPactEscanos * 100.0 / TotalAvailableEscanos, 0, 100).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%";
+
     private SnapshotQuery BuildQuery() => new()
     {
         ElectionSlot = globalSettings.ElectionSlot,
@@ -709,4 +756,3 @@
         ModuleLockService.LocksChanged -= HandleLocksChanged;
     }
 }
-

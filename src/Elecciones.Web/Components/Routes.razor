@@ -3,8 +3,12 @@
         <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
             <NotAuthorized>
                 <LayoutView Layout="typeof(Layout.MainLayout)">
-                    <div class="alert alert-warning mt-3" role="alert">
-                        Sesion requerida. <a href="/login">Inicia sesion aqui</a>.
+                    <div class="ws-auth-page">
+                        <div class="ws-auth-card text-center">
+                            <div class="ws-control-group-title justify-content-center mb-2">Acceso restringido</div>
+                            <p class="mb-3 text-muted">Es necesario iniciar sesión como operador autorizado para acceder a esta consola.</p>
+                            <a href="/login" class="ws-btn ws-btn-primary w-100 text-decoration-none">Ir a inicio de sesión</a>
+                        </div>
                     </div>
                 </LayoutView>
             </NotAuthorized>

@@ -3,18 +3,18 @@
     "Module": 1,
     "IsLocked": true,
     "IsOnAir": false,
-    "Owner": "admin",
-    "LockedAtUtc": "2026-05-29T06:38:35.1874276Z",
-    "LastActionUtc": null,
-    "LastActionType": null,
-    "LastScene": ""
+    "Owner": "op_faldon",
+    "LockedAtUtc": "2026-10-28T12:35:51.1531555Z",
+    "LastActionUtc": "2026-10-28T12:36:39.8613317Z",
+    "LastActionType": 3,
+    "LastScene": "Escrutinio"
   },
   {
     "Module": 2,
-    "IsLocked": false,
+    "IsLocked": true,
     "IsOnAir": false,
-    "Owner": "",
-    "LockedAtUtc": null,
+    "Owner": "op_carton",
+    "LockedAtUtc": "2026-10-28T12:32:53.1205991Z",
     "LastActionUtc": null,
     "LastActionType": null,
     "LastScene": ""
