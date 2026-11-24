@@ -11,15 +11,18 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
 {
     private readonly IOptionsMonitor<GraphicsEndpointsOptions> _graphicsMonitor;
     private readonly IOptionsMonitor<OperationalOptions> _operationalMonitor;
+    private readonly IOptionsMonitor<StorageOptions> _storageMonitor;
     private readonly IWebHostEnvironment _environment;
 
     public OperationalConfigurationService(
         IOptionsMonitor<GraphicsEndpointsOptions> graphicsMonitor,
         IOptionsMonitor<OperationalOptions> operationalMonitor,
+        IOptionsMonitor<StorageOptions> storageMonitor,
         IWebHostEnvironment environment)
     {
         _graphicsMonitor = graphicsMonitor;
         _operationalMonitor = operationalMonitor;
+        _storageMonitor = storageMonitor;
         _environment = environment;
     }
 
@@ -28,7 +31,8 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
         return new OperationalConfigurationSnapshot
         {
             GraphicsEndpoints = Clone(_graphicsMonitor.CurrentValue),
-            Operational = NormalizeOperational(Clone(_operationalMonitor.CurrentValue))
+            Operational = NormalizeOperational(Clone(_operationalMonitor.CurrentValue)),
+            Storage = CloneStorage(_storageMonitor.CurrentValue)
         };
     }
 
@@ -52,6 +56,7 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
         {
             var graphics = Clone(snapshot.GraphicsEndpoints);
             var operational = NormalizeOperational(Clone(snapshot.Operational));
+            var storage = CloneStorage(snapshot.Storage);
 
             var json = await File.ReadAllTextAsync(targetPath, cancellationToken);
             var root = JsonNode.Parse(json)?.AsObject() ?? new JsonObject();
@@ -67,6 +72,29 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
             operationalSection["Hours"] = BuildHoursNode(operational.Hours);
             operationalSection["VideoSources"] = BuildVideoSourcesNode(operational.VideoSources);
             root["Operational"] = operationalSection;
+
+            var storageSection = root["Storage"]?.AsObject() ?? new JsonObject();
+            storageSection["CsvFolder"] = storage.CsvFolder;
+            storageSection["JsonFolder"] = storage.JsonFolder;
+            var csvByModuleNode = storageSection["CsvFoldersByModule"]?.AsObject() ?? new JsonObject();
+            foreach (var kvp in storage.CsvFoldersByModule)
+            {
+                csvByModuleNode[kvp.Key] = kvp.Value?.Trim() ?? string.Empty;
+            }
+            storageSection["CsvFoldersByModule"] = csvByModuleNode;
+            var cartonFiles = storage.CartonCsvFiles ?? new CartonCsvFilesOptions();
+            storageSection["CartonCsvFiles"] = new JsonObject
+            {
+                ["Delimiter"] = string.IsNullOrEmpty(cartonFiles.Delimiter) ? ";" : cartonFiles.Delimiter,
+                ["ParticipacionFileName"] = cartonFiles.ParticipacionFileName?.Trim() ?? "Carton_Participacion.csv",
+                ["MayoriasPartidosFileName"] = cartonFiles.MayoriasPartidosFileName?.Trim() ?? "datos_partidos.csv",
+                ["MayoriasProvinciaFileName"] = cartonFiles.MayoriasProvinciaFileName?.Trim() ?? "mayorias_provincias.csv",
+                ["EstatalPartidosFileName"] = cartonFiles.EstatalPartidosFileName?.Trim() ?? "datos_partidos.csv",
+                ["EstatalProvinciaFileName"] = cartonFiles.EstatalProvinciaFileName?.Trim() ?? "Carton_Estatal_Provincia.csv",
+                ["CuadraditosFileName"] = cartonFiles.CuadraditosFileName?.Trim() ?? "datos_partidos.csv",
+                ["UltimoEscanoFileName"] = cartonFiles.UltimoEscanoFileName?.Trim() ?? "Carton_UltimoEscano.csv"
+            };
+            root["Storage"] = storageSection;
 
             var output = root.ToJsonString(new JsonSerializerOptions
             {
@@ -227,6 +255,38 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
                     Path = x.Path
                 })
                 .ToList()
+        };
+    }
+
+    private static StorageOptions CloneStorage(StorageOptions options)
+    {
+        var byModule = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Faldon"] = options.ResolveCsvFolderOverride("Faldon"),
+            ["Carton"] = options.ResolveCsvFolderOverride("Carton"),
+            ["Superfaldon"] = options.ResolveCsvFolderOverride("Superfaldon")
+        };
+
+        var srcFiles = options.CartonCsvFiles ?? new CartonCsvFilesOptions();
+        return new StorageOptions
+        {
+            CsvFolder = options.CsvFolder?.Trim() ?? "Data/CSV",
+            JsonFolder = options.JsonFolder?.Trim() ?? "Data/JSON",
+            BrainStormCsvFormat = options.BrainStormCsvFormat,
+            EnableRecuentosJson = options.EnableRecuentosJson,
+            RecuentosJsonFileName = options.RecuentosJsonFileName,
+            CsvFoldersByModule = byModule,
+            CartonCsvFiles = new CartonCsvFilesOptions
+            {
+                Delimiter = string.IsNullOrEmpty(srcFiles.Delimiter) ? ";" : srcFiles.Delimiter,
+                ParticipacionFileName = srcFiles.ParticipacionFileName?.Trim() ?? "Carton_Participacion.csv",
+                MayoriasPartidosFileName = srcFiles.MayoriasPartidosFileName?.Trim() ?? "datos_partidos.csv",
+                MayoriasProvinciaFileName = srcFiles.MayoriasProvinciaFileName?.Trim() ?? "mayorias_provincias.csv",
+                EstatalPartidosFileName = srcFiles.EstatalPartidosFileName?.Trim() ?? "datos_partidos.csv",
+                EstatalProvinciaFileName = srcFiles.EstatalProvinciaFileName?.Trim() ?? "Carton_Estatal_Provincia.csv",
+                CuadraditosFileName = srcFiles.CuadraditosFileName?.Trim() ?? "datos_partidos.csv",
+                UltimoEscanoFileName = srcFiles.UltimoEscanoFileName?.Trim() ?? "Carton_UltimoEscano.csv"
+            }
         };
     }
 

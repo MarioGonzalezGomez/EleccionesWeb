@@ -14,6 +14,7 @@ public sealed class OperationalConfigurationSnapshot
 {
     public GraphicsEndpointsOptions GraphicsEndpoints { get; init; } = new();
     public OperationalOptions Operational { get; init; } = new();
+    public StorageOptions Storage { get; init; } = new();
 }
 
 public sealed record EndpointConnectivityStatus(

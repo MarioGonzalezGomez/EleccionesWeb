@@ -1,9 +1,10 @@
-﻿namespace Elecciones.Application.Models;
+namespace Elecciones.Application.Models;
 
 public sealed class OperationRequest
 {
     public string OperatorId { get; init; } = string.Empty;
     public GraphicModule Module { get; init; }
+    public CartonKind? CartonKind { get; init; }
     public string Scene { get; init; } = string.Empty;
     public OperationActionType Action { get; init; }
     public int? SceneSeconds { get; init; }

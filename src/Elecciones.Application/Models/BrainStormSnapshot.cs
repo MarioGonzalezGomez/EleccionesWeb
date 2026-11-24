@@ -3,9 +3,11 @@ namespace Elecciones.Application.Models;
 public sealed record BrainStormSnapshot
 {
     public CircunscripcionSummary Circunscripcion { get; init; } = new("", "");
+    public string ComunidadCircunscripcion { get; init; } = string.Empty;
     public bool Oficiales { get; init; }
     public int Avance { get; init; }
     public double Escrutado { get; init; }
+    public double EscrutadoGeneral { get; init; }
     public double Participacion { get; init; }
     public double ParticipacionHistorica { get; init; }
     public double ParticipacionMedia { get; init; }
@@ -32,8 +34,10 @@ public sealed record BrainStormSnapshot
     public string NombreSondeo { get; init; } = string.Empty;
     public DateTime GeneratedAtUtc { get; init; } = DateTime.UtcNow;
     public IReadOnlyList<PartidoSnapshot> Partidos { get; init; } = [];
+    public IReadOnlyList<PartidoSnapshot> PartidosCircunscripcionCompletos { get; init; } = [];
     public IReadOnlyList<PartidoSnapshot> CsvTemplatePartidos { get; init; } = [];
     public IReadOnlyList<ProvinciaMapaSnapshot> ProvinciasAutonomia { get; init; } = [];
+    public IReadOnlyList<CircunscripcionMayoriaSnapshot> MayoriasCircunscripciones { get; init; } = [];
     public IReadOnlyList<string> TodasLasProvinciasMapa { get; init; } = [];
     public IReadOnlyList<VideoSlotSnapshot> VideoSlots { get; init; } = [];
 }

@@ -99,6 +99,12 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
 
         var contextCirc = await ResolveContextCircunscripcionAsync(db, query, cps, cancellationToken);
         var partidos = BuildPartidoSnapshots(cps, query, oficiales, query.IncludeZeroSeats);
+        var partidosCircunscripcionCompletos = await ResolveFullCircunscripcionPartidosAsync(
+            db,
+            contextCirc.Codigo,
+            query.MedioCodigo,
+            oficiales,
+            cancellationToken);
         var csvTemplatePartidos = await ResolveCsvTemplatePartidosAsync(
             db,
             query,
@@ -118,15 +124,22 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             avance = query.Avance.Value;
         }
         var participacion = await ResolveParticipacionDataAsync(db, contextCirc, avance, query.ElectionSlot, cancellationToken);
-        var (todasLasProvincias, provinciasAutonomia) = await ResolveMapaProvinciasAsync(db, contextCirc, oficiales, cancellationToken);
+        var (todasLasProvincias, provinciasAutonomia, mayoriasCircunscripciones) = await ResolveMapaYMayoriasAsync(
+            db,
+            contextCirc,
+            query.MedioCodigo,
+            oficiales,
+            cancellationToken);
         var operational = _operationalMonitor?.CurrentValue ?? new OperationalOptions();
 
         return new BrainStormSnapshot
         {
             Circunscripcion = new CircunscripcionSummary(contextCirc.Codigo, contextCirc.Nombre),
+            ComunidadCircunscripcion = contextCirc.Comunidad?.Trim() ?? string.Empty,
             Oficiales = oficiales,
             Avance = avance,
             Escrutado = contextCirc.Escrutado,
+            EscrutadoGeneral = participacion.EscrutadoGeneral,
             Participacion = participacion.Actual,
             ParticipacionHistorica = participacion.Historica,
             ParticipacionMedia = participacion.Media,
@@ -153,8 +166,10 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             NombreSondeo = query.MedioCodigo ?? string.Empty,
             GeneratedAtUtc = DateTime.UtcNow,
             Partidos = partidos,
+            PartidosCircunscripcionCompletos = partidosCircunscripcionCompletos,
             CsvTemplatePartidos = csvTemplatePartidos,
             ProvinciasAutonomia = provinciasAutonomia,
+            MayoriasCircunscripciones = mayoriasCircunscripciones,
             TodasLasProvinciasMapa = todasLasProvincias,
             VideoSlots = operational.VideoSources
                 .Select(v => new VideoSlotSnapshot(v.Slot, v.IsLive, v.Path ?? string.Empty))
@@ -162,21 +177,63 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         };
     }
 
-    private static async Task<(IReadOnlyList<string> TodasLasProvincias, IReadOnlyList<ProvinciaMapaSnapshot> ProvinciasAutonomia)> ResolveMapaProvinciasAsync(
+    private static async Task<(
+        IReadOnlyList<string> TodasLasProvincias,
+        IReadOnlyList<ProvinciaMapaSnapshot> ProvinciasAutonomia,
+        IReadOnlyList<CircunscripcionMayoriaSnapshot> MayoriasCircunscripciones)> ResolveMapaYMayoriasAsync(
         EleccionesDbContext db,
         CircunscripcionEntity contextCirc,
+        string? medioCodigo,
         bool oficiales,
         CancellationToken cancellationToken)
     {
-        var allProvincialCircs = await db.Circunscripciones
+        var allCircs = await db.Circunscripciones
             .AsNoTracking()
-            .Where(x => x.Codigo.EndsWith("000") && !x.Codigo.EndsWith("00000") && !string.IsNullOrWhiteSpace(x.Nombre))
+            .Where(x => !string.IsNullOrWhiteSpace(x.Codigo) && !string.IsNullOrWhiteSpace(x.Nombre))
             .OrderBy(x => x.Codigo)
             .ToListAsync(cancellationToken);
+
+        var allProvincialCircs = allCircs
+            .Where(x => x.Codigo.EndsWith("000", StringComparison.Ordinal) && !x.Codigo.EndsWith("00000", StringComparison.Ordinal))
+            .ToList();
 
         var todasLasProvincias = allProvincialCircs
             .Select(x => x.Nombre.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var allCps = await db.CircunscripcionPartidos
+            .AsNoTracking()
+            .Include(x => x.Partido)
+            .ToListAsync(cancellationToken);
+
+        if (!oficiales && !string.IsNullOrWhiteSpace(medioCodigo) && !IsRtve(medioCodigo))
+        {
+            await ApplyMedioSondeoOverlayAsync(db, allCps, medioCodigo.Trim(), cancellationToken);
+        }
+
+        var winnerByCirc = allCps
+            .GroupBy(x => x.CodCircunscripcion, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => ResolveValidMajorityWinner(g.ToList(), oficiales),
+                StringComparer.OrdinalIgnoreCase);
+
+        var mayoriasCircunscripciones = allCircs
+            .Select(c =>
+            {
+                var winner = winnerByCirc.GetValueOrDefault(c.Codigo);
+                var winnerSeats = winner is null ? 0 : (oficiales ? winner.EscaniosHasta : winner.EscaniosHastaSondeo);
+                return new CircunscripcionMayoriaSnapshot(
+                    c.Codigo.Trim(),
+                    c.Nombre.Trim(),
+                    winner?.CodPartido ?? string.Empty,
+                    winner?.Partido?.Siglas ?? string.Empty,
+                    c.Escanios,
+                    winnerSeats,
+                    c.Escrutado,
+                    c.Participacion);
+            })
             .ToList();
 
         List<CircunscripcionEntity> targetProvincias;
@@ -202,33 +259,46 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             targetProvincias = [contextCirc];
         }
 
-        if (targetProvincias.Count == 0)
-        {
-            return (todasLasProvincias, []);
-        }
-
-        var targetCodes = targetProvincias.Select(x => x.Codigo).ToList();
-        var cpsProvincias = await db.CircunscripcionPartidos
-            .AsNoTracking()
-            .Include(x => x.Partido)
-            .Where(x => targetCodes.Contains(x.CodCircunscripcion))
-            .ToListAsync(cancellationToken);
-
-        var winnerByCirc = cpsProvincias
-            .GroupBy(x => x.CodCircunscripcion, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                g => g.Key,
-                g => OrderCpList(g.ToList(), oficiales).FirstOrDefault()?.Partido?.Siglas ?? string.Empty,
-                StringComparer.OrdinalIgnoreCase);
-
         var provinciasAutonomia = targetProvincias
-            .Select(p => new ProvinciaMapaSnapshot(
-                p.Codigo,
-                p.Nombre.Trim(),
-                winnerByCirc.GetValueOrDefault(p.Codigo, string.Empty)))
+            .Select(p =>
+            {
+                var winner = winnerByCirc.GetValueOrDefault(p.Codigo);
+                var winnerSeats = winner is null ? 0 : (oficiales ? winner.EscaniosHasta : winner.EscaniosHastaSondeo);
+                var winnerPct = winner is null ? 0.0 : (oficiales ? winner.Votos : winner.VotosSondeo);
+                return new ProvinciaMapaSnapshot(
+                    p.Codigo,
+                    p.Nombre.Trim(),
+                    winner?.Partido?.Siglas ?? string.Empty,
+                    winner?.CodPartido ?? string.Empty,
+                    p.Escrutado,
+                    p.Escanios,
+                    p.Participacion,
+                    p.Votantes,
+                    winnerSeats,
+                    winnerPct);
+            })
             .ToList();
 
-        return (todasLasProvincias, provinciasAutonomia);
+        return (todasLasProvincias, provinciasAutonomia, mayoriasCircunscripciones);
+    }
+
+    private static CircunscripcionPartidoEntity? ResolveValidMajorityWinner(
+        List<CircunscripcionPartidoEntity> list,
+        bool oficiales)
+    {
+        var candidate = OrderCpList(list, oficiales)
+            .FirstOrDefault(x => !string.Equals(x.CodPartido, "99999", StringComparison.Ordinal));
+
+        if (candidate is null)
+        {
+            return null;
+        }
+
+        var hasActivity = oficiales
+            ? (candidate.EscaniosHasta > 0 || candidate.Votos > 0 || candidate.Votantes > 0)
+            : (candidate.EscaniosHastaSondeo > 0 || candidate.EscaniosDesdeSondeo > 0 || candidate.VotosSondeo > 0);
+
+        return hasActivity ? candidate : null;
     }
 
     private static async Task<List<CircunscripcionPartidoEntity>> GetCircunscripcionAsync(
@@ -549,7 +619,34 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         return raw?.Trim() ?? string.Empty;
     }
 
-    private async Task<(double Actual, double Historica, double Media)> ResolveParticipacionDataAsync(
+    private static async Task<IReadOnlyList<PartidoSnapshot>> ResolveFullCircunscripcionPartidosAsync(
+        EleccionesDbContext db,
+        string circunscripcionCodigo,
+        string? medioCodigo,
+        bool oficiales,
+        CancellationToken cancellationToken)
+    {
+        var targetCode = string.IsNullOrWhiteSpace(circunscripcionCodigo) ? "9900000" : circunscripcionCodigo.Trim();
+        var allCps = await db.CircunscripcionPartidos
+            .AsNoTracking()
+            .Include(x => x.Partido)
+            .Include(x => x.Circunscripcion)
+            .Where(x => x.CodCircunscripcion == targetCode)
+            .ToListAsync(cancellationToken);
+
+        if (!oficiales && !string.IsNullOrWhiteSpace(medioCodigo) && !IsRtve(medioCodigo))
+        {
+            await ApplyMedioSondeoOverlayAsync(db, allCps, medioCodigo.Trim(), cancellationToken);
+        }
+
+        return BuildPartidoSnapshots(
+            OrderCpList(allCps, oficiales),
+            new SnapshotQuery { Kind = SnapshotQueryKind.Circunscripcion, IncludeZeroSeats = true },
+            oficiales,
+            includeZeroSeats: true);
+    }
+
+    private async Task<(double Actual, double Historica, double Media, double EscrutadoGeneral)> ResolveParticipacionDataAsync(
         EleccionesDbContext db,
         CircunscripcionEntity contextCirc,
         int avance,
@@ -566,13 +663,14 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         }
 
         var mediaFallback = parent ?? contextCirc;
+        var escrutadoGral = mediaFallback.Escrutado;
 
         return avance switch
         {
-            1 => (contextCirc.Avance1, contextCirc.Avance1Hist, mediaFallback.Avance1),
-            2 => (contextCirc.Avance2, contextCirc.Avance2Hist, mediaFallback.Avance2),
-            3 => (contextCirc.Avance3, contextCirc.Avance3Hist, mediaFallback.Avance3),
-            _ => (contextCirc.Participacion, contextCirc.ParticipacionHist, mediaFallback.Participacion)
+            1 => (contextCirc.Avance1, contextCirc.Avance1Hist, mediaFallback.Avance1, escrutadoGral),
+            2 => (contextCirc.Avance2, contextCirc.Avance2Hist, mediaFallback.Avance2, escrutadoGral),
+            3 => (contextCirc.Avance3, contextCirc.Avance3Hist, mediaFallback.Avance3, escrutadoGral),
+            _ => (contextCirc.Participacion, contextCirc.ParticipacionHist, mediaFallback.Participacion, escrutadoGral)
         };
     }
 

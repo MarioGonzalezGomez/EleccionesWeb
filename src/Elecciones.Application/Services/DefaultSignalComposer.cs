@@ -40,8 +40,6 @@ public sealed class DefaultSignalComposer : ISignalComposer
     private readonly Dictionary<GraphicModule, UltimoEscanoState> _ultimoEscanoStates = new();
     private readonly Dictionary<GraphicModule, FaldonState> _faldonStates = new();
     private readonly Dictionary<GraphicModule, CartonState> _cartonStates = new();
-    private bool _animacionPrimerosEnabled = true;
-    private bool _animacionSondeoEnabled = true;
 
     public string Compose(OperationRequest request, BrainStormSnapshot snapshot)
     {
@@ -167,7 +165,7 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
                 case OperationActionType.Enter:
                     lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
-                    if (_animacionPrimerosEnabled && (request.Oficiales || _animacionSondeoEnabled))
+                    if (state.AnimacionPrimerosEnabled && (request.Oficiales || state.AnimacionSondeoEnabled))
                     {
                         lines.Add(EventRun("PrimerosResultados/Entra"));
                     }
@@ -613,10 +611,10 @@ public sealed class DefaultSignalComposer : ISignalComposer
             GraphicCommand.UltimoEntraPartidoIzquierda => ResolveUltimoEntraPartido(request, snapshot, true),
             GraphicCommand.UltimoEntraPartidoDerecha => ResolveUltimoEntraPartido(request, snapshot, false),
 
-            GraphicCommand.PrimerosResultadosActiva => ResolvePrimerosResultadosCommand(true),
-            GraphicCommand.PrimerosResultadosDesactiva => ResolvePrimerosResultadosCommand(false),
-            GraphicCommand.AnimacionSondeoActiva => ResolveAnimacionSondeoCommand(true),
-            GraphicCommand.AnimacionSondeoDesactiva => ResolveAnimacionSondeoCommand(false),
+            GraphicCommand.PrimerosResultadosActiva => ResolvePrimerosResultadosCommand(request.Module, true),
+            GraphicCommand.PrimerosResultadosDesactiva => ResolvePrimerosResultadosCommand(request.Module, false),
+            GraphicCommand.AnimacionSondeoActiva => ResolveAnimacionSondeoCommand(request.Module, true),
+            GraphicCommand.AnimacionSondeoDesactiva => ResolveAnimacionSondeoCommand(request.Module, false),
             GraphicCommand.DeSondeoAOficiales => [],
             GraphicCommand.CambioEleccionesEuropa => [ItemSetNumeric("TICKER/EUROPA", "MAP_INT_PAR", 1)],
             GraphicCommand.CambioEleccionesNacional => [ItemSetNumeric("TICKER/EUROPA", "MAP_INT_PAR", 0)],
@@ -663,21 +661,21 @@ public sealed class DefaultSignalComposer : ISignalComposer
         return $"P\\PROJECT_PARAMETER\\{parameterName}\\{parameterValue}\\\\\r\n";
     }
 
-    private IEnumerable<string> ResolvePrimerosResultadosCommand(bool enabled)
+    private IEnumerable<string> ResolvePrimerosResultadosCommand(GraphicModule module, bool enabled)
     {
         lock (_stateLock)
         {
-            _animacionPrimerosEnabled = enabled;
+            GetOrCreateFaldonState(module).AnimacionPrimerosEnabled = enabled;
         }
 
         return [];
     }
 
-    private IEnumerable<string> ResolveAnimacionSondeoCommand(bool enabled)
+    private IEnumerable<string> ResolveAnimacionSondeoCommand(GraphicModule module, bool enabled)
     {
         lock (_stateLock)
         {
-            _animacionSondeoEnabled = enabled;
+            GetOrCreateFaldonState(module).AnimacionSondeoEnabled = enabled;
         }
 
         return [];
@@ -2036,11 +2034,55 @@ public sealed class DefaultSignalComposer : ISignalComposer
             "PARTICIPACION" => ComposeCartonParticipacion(request, snapshot, lines),
             "CCAA_CARTONES" => ComposeCartonCcaa(request, snapshot, lines),
             "MAYORIAS" => ComposeCartonMayorias(request, snapshot, lines),
+            "ESTATAL" => ComposeCartonEstatal(request, snapshot, lines),
+            "CUADRADITOS" => ComposeCartonCuadraditos(request, snapshot, lines),
             "CARRUSEL" => ComposeCartonCarrusel(request, snapshot, lines),
             "CARTON_PARTIDOS" => ComposeCartonPartidos(request, snapshot, lines),
             "ULTIMO_ESCANO" or "ULTIMOESCANO" => ComposeCartonUltimoEscano(request, lines),
             _ => false
         };
+    }
+
+    private static bool ComposeCartonEstatal(OperationRequest request, BrainStormSnapshot snapshot, List<string> lines)
+    {
+        var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
+        switch (request.Action)
+        {
+            case OperationActionType.Enter:
+                lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                lines.Add(EventRun("ESTATAL/ENTRA"));
+                return true;
+            case OperationActionType.Update:
+                lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                lines.Add(EventRun("ESTATAL/ACTUALIZA"));
+                return true;
+            case OperationActionType.Exit:
+                lines.Add(EventRun("ESTATAL/SALE"));
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static bool ComposeCartonCuadraditos(OperationRequest request, BrainStormSnapshot snapshot, List<string> lines)
+    {
+        var codeFile = request.Oficiales ? "Oficial_Codigo" : "Sondeo_Codigo";
+        switch (request.Action)
+        {
+            case OperationActionType.Enter:
+                lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                lines.Add(EventRun("CUADRADITOS/ENTRA"));
+                return true;
+            case OperationActionType.Update:
+                lines.Add(ItemSetNoValue(codeFile, "MAP_LLSTRING_LOAD"));
+                lines.Add(EventRun("CUADRADITOS/ACTUALIZA"));
+                return true;
+            case OperationActionType.Exit:
+                lines.Add(EventRun("CUADRADITOS/SALE"));
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static List<string> ResolveMapaProvinciasNames(BrainStormSnapshot snapshot)
@@ -2407,7 +2449,8 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
         lock (_stateLock)
         {
-            return _animacionPrimerosEnabled && (request.Oficiales || _animacionSondeoEnabled);
+            var state = GetOrCreateFaldonState(request.Module);
+            return state.AnimacionPrimerosEnabled && (request.Oficiales || state.AnimacionSondeoEnabled);
         }
     }
 
@@ -2418,7 +2461,11 @@ public sealed class DefaultSignalComposer : ISignalComposer
             _pactosStates.Remove(module);
             _sedesStates.Remove(module);
             _ultimoEscanoStates.Remove(module);
-            _faldonStates.Remove(module);
+            if (_faldonStates.TryGetValue(module, out var faldonState))
+            {
+                faldonState.PartidosExpandidos.Clear();
+                faldonState.LastTickerTdActiveSiglas.Clear();
+            }
             _cartonStates.Remove(module);
         }
     }
@@ -2533,6 +2580,8 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
     private sealed class FaldonState
     {
+        public bool AnimacionPrimerosEnabled { get; set; } = true;
+        public bool AnimacionSondeoEnabled { get; set; } = true;
         public List<string> PartidosExpandidos { get; } = [];
         public List<string> LastTickerTdActiveSiglas { get; set; } = [];
     }

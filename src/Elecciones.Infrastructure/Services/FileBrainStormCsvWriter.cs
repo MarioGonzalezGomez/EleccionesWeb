@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Linq;
 using System.Text;
@@ -5,6 +6,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
+using Elecciones.Infrastructure.Csv.Cartones;
 using Elecciones.Infrastructure.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -17,7 +19,19 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
     private const string BrainStormCodigoFileName = "Brainstorm_Codigo.csv";
     private const string BrainStormSondeoCodigoFileName = "Brainstorm_Sondeo_Codigo.csv";
 
-    private readonly StorageOptions _options;
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileGates = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly IReadOnlyDictionary<CartonKind, ICartonCsvFormatter> CartonFormatters =
+        new ICartonCsvFormatter[]
+        {
+            new ParticipacionCartonCsvFormatter(),
+            new MayoriasCartonCsvFormatter(),
+            new EstatalCartonCsvFormatter(),
+            new CuadraditosCartonCsvFormatter(),
+            new UltimoEscanoCartonCsvFormatter()
+        }.ToDictionary(f => f.Kind);
+
+    private readonly StorageOptions? _staticOptions;
+    private readonly IOptionsMonitor<StorageOptions>? _optionsMonitor;
     private readonly ILogger<FileBrainStormCsvWriter> _logger;
     private static readonly JsonSerializerOptions RecuentosJsonOptions = new()
     {
@@ -28,9 +42,17 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
 
     public FileBrainStormCsvWriter(IOptions<StorageOptions> options, ILogger<FileBrainStormCsvWriter> logger)
     {
-        _options = options.Value;
+        _staticOptions = options.Value;
         _logger = logger;
     }
+
+    public FileBrainStormCsvWriter(IOptionsMonitor<StorageOptions> optionsMonitor, ILogger<FileBrainStormCsvWriter> logger)
+    {
+        _optionsMonitor = optionsMonitor;
+        _logger = logger;
+    }
+
+    private StorageOptions CurrentOptions => _optionsMonitor?.CurrentValue ?? _staticOptions ?? new StorageOptions();
 
     public async Task<string> WriteAsync(
         BrainStormSnapshot snapshot,
@@ -38,18 +60,19 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
         CancellationToken cancellationToken = default,
         GraphicModule? module = null)
     {
-        var folderPath = ResolveCsvFolder(_options.ResolveCsvFolderForModule(module));
+        var options = CurrentOptions;
+        var folderPath = ResolveCsvFolder(options.ResolveCsvFolderForModule(module));
         Directory.CreateDirectory(folderPath);
 
         var safeName = string.IsNullOrWhiteSpace(exportName) ? "BrainStorm" : exportName.Trim();
         var filePath = Path.Combine(folderPath, $"{safeName}.csv");
-        var isOldFormat = IsOldFormat(_options.BrainStormCsvFormat);
+        var isOldFormat = IsOldFormat(options.BrainStormCsvFormat);
         var rows = isOldFormat
             ? BuildLegacyRows(snapshot)
             : BuildCodeAlignedRows(snapshot);
         var csv = BuildCsv(snapshot, rows, includeEscaniosColumn: !isOldFormat);
 
-        await File.WriteAllTextAsync(filePath, csv, Encoding.UTF8, cancellationToken);
+        await WriteFileExclusivelyAsync(filePath, csv, cancellationToken);
 
         _logger.LogInformation("BrainStorm CSV generated at {Path}", filePath);
 
@@ -60,13 +83,13 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
 
         var csvCodigoPath = Path.Combine(folderPath, BrainStormCodigoFileName);
         var csvCodigo = BuildCsv(snapshot, BuildCodeAlignedRows(snapshot), includeEscaniosColumn: true);
-        await File.WriteAllTextAsync(csvCodigoPath, csvCodigo, Encoding.UTF8, cancellationToken);
+        await WriteFileExclusivelyAsync(csvCodigoPath, csvCodigo, cancellationToken);
         _logger.LogInformation("BrainStorm codigo CSV generated at {Path}", csvCodigoPath);
 
         if (!snapshot.Oficiales)
         {
             var csvSondeoPath = Path.Combine(folderPath, BrainStormSondeoCodigoFileName);
-            await File.WriteAllTextAsync(csvSondeoPath, csv, Encoding.UTF8, cancellationToken);
+            await WriteFileExclusivelyAsync(csvSondeoPath, csv, cancellationToken);
             _logger.LogInformation("BrainStorm sondeo codigo CSV generated at {Path}", csvSondeoPath);
         }
 
@@ -90,7 +113,8 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
             return null;
         }
 
-        var folderPath = ResolveCsvFolder(_options.ResolveCsvFolderForModule(module));
+        var options = CurrentOptions;
+        var folderPath = ResolveCsvFolder(options.ResolveCsvFolderForModule(module));
         Directory.CreateDirectory(folderPath);
         var filePath = Path.Combine(folderPath, "Sedes.csv");
 
@@ -125,7 +149,7 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
             .Append(tendenciaVotos)
             .AppendLine();
 
-        await File.WriteAllTextAsync(filePath, csv.ToString(), Encoding.UTF8, cancellationToken);
+        await WriteFileExclusivelyAsync(filePath, csv.ToString(), cancellationToken);
         _logger.LogInformation("Sedes CSV generated at {Path}", filePath);
         return filePath;
     }
@@ -135,25 +159,125 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
         CancellationToken cancellationToken = default,
         GraphicModule? module = null)
     {
-        if (!_options.EnableRecuentosJson)
+        var options = CurrentOptions;
+        if (!options.EnableRecuentosJson)
         {
             return null;
         }
 
-        var folderPath = ResolveCsvFolder(_options.ResolveJsonFolderForModule(module));
+        var folderPath = ResolveCsvFolder(options.ResolveJsonFolderForModule(module));
         Directory.CreateDirectory(folderPath);
 
-        var safeName = string.IsNullOrWhiteSpace(_options.RecuentosJsonFileName)
+        var safeName = string.IsNullOrWhiteSpace(options.RecuentosJsonFileName)
             ? "datos_escrutado"
-            : _options.RecuentosJsonFileName.Trim();
+            : options.RecuentosJsonFileName.Trim();
         var filePath = Path.Combine(folderPath, $"{safeName}.json");
 
         var payload = BuildRecuentosPayload(snapshot);
         var json = JsonSerializer.Serialize(payload, RecuentosJsonOptions);
-        await File.WriteAllTextAsync(filePath, json, Encoding.UTF8, cancellationToken);
+        await WriteFileExclusivelyAsync(filePath, json, cancellationToken);
 
         _logger.LogInformation("Recuentos JSON generated at {Path}", filePath);
         return filePath;
+    }
+
+    public async Task<CartonCsvExportResult> WriteCartonAsync(
+        CartonKind cartonKind,
+        BrainStormSnapshot snapshot,
+        SnapshotQuery query,
+        CancellationToken cancellationToken = default,
+        GraphicModule? module = GraphicModule.Carton)
+    {
+        var options = CurrentOptions;
+        var folderPath = ResolveCsvFolder(options.ResolveCsvFolderForModule(module));
+        Directory.CreateDirectory(folderPath);
+
+        if (!CartonFormatters.TryGetValue(cartonKind, out var formatter))
+        {
+            formatter = CartonFormatters[CartonKind.Participacion];
+        }
+
+        var descriptors = formatter.BuildDocuments(
+            snapshot,
+            query ?? new SnapshotQuery(),
+            options.CartonCsvFiles ?? new CartonCsvFilesOptions());
+
+        var delimiter = options.CartonCsvFiles?.Delimiter ?? ";";
+        var artifacts = new List<CartonCsvFileArtifact>(descriptors.Count);
+
+        foreach (var descriptor in descriptors)
+        {
+            var filePath = Path.Combine(folderPath, descriptor.FileName);
+            var csvContent = CartonCsvFormattingHelpers.Serialize(descriptor, delimiter);
+            await WriteFileExclusivelyAsync(filePath, csvContent, cancellationToken);
+            _logger.LogInformation(
+                "Carton CSV ({Kind} / {Role}) generated at {Path}",
+                cartonKind,
+                descriptor.LogicalRole,
+                filePath);
+
+            artifacts.Add(new CartonCsvFileArtifact(descriptor.LogicalRole, descriptor.FileName, filePath));
+        }
+
+        return new CartonCsvExportResult(cartonKind, artifacts);
+    }
+
+    public async Task<IReadOnlyList<CartonCsvFileArtifact>> WriteAllCartonFilesAsync(
+        BrainStormSnapshot snapshot,
+        SnapshotQuery query,
+        CancellationToken cancellationToken = default,
+        GraphicModule? module = GraphicModule.Carton)
+    {
+        var options = CurrentOptions;
+        var folderPath = ResolveCsvFolder(options.ResolveCsvFolderForModule(module));
+        Directory.CreateDirectory(folderPath);
+
+        var fileOptions = options.CartonCsvFiles ?? new CartonCsvFilesOptions();
+        var delimiter = string.IsNullOrEmpty(fileOptions.Delimiter) ? ";" : fileOptions.Delimiter;
+        var safeQuery = query ?? new SnapshotQuery();
+
+        var writtenByFileName = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var artifacts = new List<CartonCsvFileArtifact>();
+
+        foreach (var formatter in CartonFormatters.Values.OrderBy(f => f.Kind))
+        {
+            var descriptors = formatter.BuildDocuments(snapshot, safeQuery, fileOptions);
+            foreach (var descriptor in descriptors)
+            {
+                if (!writtenByFileName.Add(descriptor.FileName))
+                {
+                    continue;
+                }
+
+                var filePath = Path.Combine(folderPath, descriptor.FileName);
+                var csvContent = CartonCsvFormattingHelpers.Serialize(descriptor, delimiter);
+                await WriteFileExclusivelyAsync(filePath, csvContent, cancellationToken);
+                _logger.LogInformation(
+                    "Carton synchronized CSV ({FileName} / {Role}) generated at {Path}",
+                    descriptor.FileName,
+                    descriptor.LogicalRole,
+                    filePath);
+
+                artifacts.Add(new CartonCsvFileArtifact(descriptor.LogicalRole, descriptor.FileName, filePath));
+            }
+        }
+
+        return artifacts;
+    }
+
+    private static async Task WriteFileExclusivelyAsync(string filePath, string content, CancellationToken cancellationToken)
+    {
+        var fullPath = Path.GetFullPath(filePath);
+        var gate = FileGates.GetOrAdd(fullPath, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            await File.WriteAllTextAsync(fullPath, content, Encoding.UTF8, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private static string ResolveCsvFolder(string configuredPath)

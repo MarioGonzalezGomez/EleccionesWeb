@@ -299,11 +299,21 @@ code {
 }
 
 .ws-select-circ {
-    min-width: 215px;
+    min-width: 195px;
+}
+
+.ws-select-slot {
+    min-width: 122px;
 }
 
 .ws-select-medio {
-    min-width: 125px;
+    min-width: 118px;
+}
+
+.ws-seg-compact .ws-seg-btn {
+    padding: 0.22rem 0.6rem;
+    font-size: 0.76rem;
+    white-space: nowrap;
 }
 
 /* Conmutador rápido entre consolas (Control / Faldón / Cartón) */
@@ -480,17 +490,10 @@ code {
 
 .ws-body {
     flex: 1;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 290px;
+    display: flex;
+    flex-direction: column;
     gap: 0.85rem;
     padding: 1rem;
-    align-items: start;
-}
-
-@media (max-width: 991.98px) {
-    .ws-body {
-        grid-template-columns: 1fr;
-    }
 }
 
 .ws-panel {
@@ -795,6 +798,95 @@ code {
     font-size: 0.74rem;
 }
 
+/* Botones Toggle de Dos Estados (ON / OFF) */
+.ws-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-family: var(--font-sans);
+    font-size: 0.81rem;
+    font-weight: 600;
+    padding: 0.36rem 0.72rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-default);
+    background-color: var(--bg-subtle);
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: background-color 130ms cubic-bezier(0.2, 0, 0, 1), border-color 130ms cubic-bezier(0.2, 0, 0, 1), color 130ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ws-toggle-btn:hover:not(:disabled) {
+    background-color: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+}
+
+.ws-toggle-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.ws-toggle-btn.is-on {
+    background-color: var(--status-live-soft);
+    border-color: var(--status-live-border);
+    color: var(--text-primary);
+}
+
+.ws-toggle-btn.is-on:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--status-live-soft) 75%, var(--status-live) 25%);
+    border-color: var(--status-live);
+}
+
+.ws-toggle-track {
+    position: relative;
+    width: 28px;
+    height: 16px;
+    border-radius: 999px;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-strong);
+    transition: background-color 140ms cubic-bezier(0.2, 0, 0, 1), border-color 140ms cubic-bezier(0.2, 0, 0, 1);
+    flex-shrink: 0;
+}
+
+.ws-toggle-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: var(--text-muted);
+    transition: transform 140ms cubic-bezier(0.2, 0, 0, 1), background-color 140ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ws-toggle-btn.is-on .ws-toggle-track {
+    background-color: var(--status-live);
+    border-color: var(--status-live);
+}
+
+.ws-toggle-btn.is-on .ws-toggle-thumb {
+    transform: translateX(12px);
+    background-color: #ffffff;
+}
+
+.ws-toggle-state {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.08rem 0.38rem;
+    border-radius: 4px;
+    background-color: var(--bg-input);
+    color: var(--text-muted);
+    letter-spacing: 0.03em;
+}
+
+.ws-toggle-btn.is-on .ws-toggle-state {
+    background-color: var(--status-live);
+    color: #ffffff;
+}
+
 /* ==========================================================================
    Pactómetro y Bloques de Escaños
    ========================================================================== */
@@ -839,10 +931,11 @@ code {
 }
 
 /* ==========================================================================
-   Sidebar de Partidos y Tablas de Datos
+   Panel Inferior de Partidos (Ancho Completo) y Tablas de Datos
    ========================================================================== */
 
-.ws-party-sidebar {
+.ws-party-panel {
+    width: 100%;
     background: var(--bg-surface);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
@@ -854,28 +947,164 @@ code {
 
 .ws-party-header {
     background: var(--bg-elevated);
-    padding: 0.55rem 0.75rem;
+    padding: 0.6rem 0.9rem;
     border-bottom: 1px solid var(--border-subtle);
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 0.5rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-secondary);
+    flex-wrap: wrap;
+    gap: 0.65rem 1rem;
 }
 
-.ws-party-filter {
-    padding: 0.45rem 0.65rem;
-    border-bottom: 1px solid var(--border-subtle);
-    background: var(--bg-surface);
+.ws-party-header-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+}
+
+.ws-party-title {
+    font-size: 0.76rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-primary);
+}
+
+.ws-party-kpis {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.ws-party-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.ws-party-search {
+    min-width: 240px;
+}
+
+@media (max-width: 575.98px) {
+    .ws-party-search {
+        min-width: 160px;
+    }
 }
 
 .ws-party-scroll {
-    max-height: calc(100vh - 165px);
+    max-height: 420px;
+    overflow-x: auto;
     overflow-y: auto;
+}
+
+.ws-party-siglas {
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: 0.01em;
+}
+
+.ws-party-name {
+    font-size: 0.79rem;
+    color: var(--text-secondary);
+    font-weight: 400;
+}
+
+.ws-party-seats {
+    font-size: 0.92rem;
+    font-weight: 700;
+}
+
+.ws-col-code {
+    width: 90px;
+}
+
+.ws-col-seats {
+    width: 145px;
+}
+
+.ws-col-diff {
+    width: 155px;
+}
+
+.ws-col-pct {
+    width: 195px;
+}
+
+.ws-col-votes {
+    width: 145px;
+}
+
+.ws-delta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    padding: 0.1rem 0.42rem;
+    border-radius: 4px;
+    font-size: 0.76rem;
+    font-weight: 700;
+}
+
+.ws-delta-pos {
+    background-color: var(--status-live-soft);
+    color: var(--status-live-text);
+    border: 1px solid var(--status-live-border);
+}
+
+.ws-delta-neg {
+    background-color: var(--status-danger-soft);
+    color: var(--status-danger-text);
+    border: 1px solid var(--status-danger-border);
+}
+
+.ws-delta-eq {
+    background-color: var(--bg-elevated);
+    color: var(--text-muted);
+    border: 1px solid var(--border-subtle);
+}
+
+.ws-hist-ref {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-weight: 400;
+}
+
+.ws-vote-pct-cell {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.55rem;
+    width: 100%;
+}
+
+.ws-vote-bar-track {
+    width: 68px;
+    height: 6px;
+    border-radius: 999px;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.ws-vote-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background-color: var(--accent-primary);
+    transition: width 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.ws-vote-bar-amber {
+    background-color: var(--status-ready);
+}
+
+.ws-vote-pct-val {
+    min-width: 56px;
+    text-align: right;
+    font-weight: 600;
 }
 
 .ws-diag-scroll {

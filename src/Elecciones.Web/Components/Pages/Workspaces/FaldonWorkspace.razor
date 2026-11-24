@@ -4,6 +4,7 @@
 @page "/operacion/pactos"
 @attribute [Authorize]
 @implements IDisposable
+@using System.Globalization
 @using Elecciones.Application.Abstractions
 @using Elecciones.Application.Models
 @using Elecciones.Application.Services
@@ -24,16 +25,22 @@
 <header class="ws-topbar">
     <div class="ws-topbar-cluster">
         <span class="ws-brand-mark">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18v2h16v-2"/><rect x="4" y="4" width="16" height="10" rx="2"/></svg>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M4 18v2h16v-2" />
+                <rect x="4" y="4" width="16" height="10" rx="2" />
+            </svg>
             Faldón
         </span>
         <span class="ws-onair-pill @(moduleState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
             <span class="ws-tally-dot"></span>
             @(moduleState.IsOnAir ? $"EN AIRE: {(string.IsNullOrWhiteSpace(moduleState.ActiveScene) ? ActiveSceneName : moduleState.ActiveScene)}" : "FUERA DE AIRE")
         </span>
-        <span class="ws-chip @(globalSettings.Oficiales ? "ws-chip-accent" : "ws-chip-amber")">
-            @(globalSettings.Oficiales ? "OFICIALES" : "SONDEO") · Elección @globalSettings.ElectionSlot
-        </span>
+        @if (moduleOficiales && EffectiveEscrutadoGeneral.HasValue)
+        {
+            <span class="ws-chip ws-chip-accent ws-mono">
+                Escrutinio Gral.: <strong>@EffectiveEscrutadoGeneral.Value.ToString("0.00", EsCulture)%</strong>
+            </span>
+        }
         @if (!IsOwner)
         {
             <button class="ws-btn ws-btn-amber ws-btn-xs" type="button" @onclick="ClaimModuleLock">
@@ -43,9 +50,37 @@
     </div>
 
     <div class="ws-topbar-cluster">
+        <div class="ws-seg-group ws-seg-compact" role="group" aria-label="Modo de datos de Faldón">
+            <button type="button"
+                    class="ws-seg-btn @(moduleOficiales ? "active" : string.Empty)"
+                    @onclick="() => SetModuleOficialesAsync(true)">
+                Oficiales
+            </button>
+            <button type="button"
+                    class="ws-seg-btn @(!moduleOficiales ? "active-amber" : string.Empty)"
+                    @onclick="() => SetModuleOficialesAsync(false)">
+                Sondeo
+            </button>
+        </div>
+
         <div class="ws-inline-field">
-            <label>Circunscripción:</label>
-            <select class="form-select form-select-sm ws-select-circ" value="@selectedCircunscripcionCodigo" @onchange="OnCircunscripcionChangedAsync">
+            <label for="faldon-slot-select">Elección:</label>
+            <select id="faldon-slot-select"
+                    class="form-select form-select-sm ws-select-slot"
+                    value="@moduleElectionSlot"
+                    @onchange="OnModuleElectionSlotChangedAsync">
+                <option value="1">Elección 1</option>
+                <option value="2">Elección 2</option>
+                <option value="3">Elección 3</option>
+            </select>
+        </div>
+
+        <div class="ws-inline-field">
+            <label for="faldon-circ-select">Circunscripción:</label>
+            <select id="faldon-circ-select"
+                    class="form-select form-select-sm ws-select-circ"
+                    value="@selectedCircunscripcionCodigo"
+                    @onchange="OnCircunscripcionChangedAsync">
                 @foreach (var circ in circunscripciones)
                 {
                     <option value="@circ.Codigo">@circ.Codigo - @circ.Nombre</option>
@@ -53,11 +88,14 @@
             </select>
         </div>
 
-        @if (!globalSettings.Oficiales)
+        @if (!moduleOficiales)
         {
             <div class="ws-inline-field">
-                <label>Sondeo:</label>
-                <select class="form-select form-select-sm ws-select-medio" value="@selectedMedioCodigo" @onchange="OnMedioChangedAsync">
+                <label for="faldon-medio-select">Sondeo:</label>
+                <select id="faldon-medio-select"
+                        class="form-select form-select-sm ws-select-medio"
+                        value="@selectedMedioCodigo"
+                        @onchange="OnMedioChangedAsync">
                     @foreach (var medio in medios)
                     {
                         <option value="@medio.Codigo">@medio.Descripcion</option>
@@ -71,8 +109,7 @@
 </header>
 
 <div class="ws-body">
-    <section class="ws-panel @(moduleState.IsOnAir ? "ws-panel-live" : "")">
-        
+    <section class="ws-panel @(moduleState.IsOnAir ? "ws-panel-live" : string.Empty)">
         @if (!string.IsNullOrWhiteSpace(feedbackMessage))
         {
             <div class="ws-banner @(feedbackIsError ? "ws-banner-error" : "ws-banner-success") mb-3" role="status">
@@ -105,6 +142,10 @@
         </div>
 
         <SceneActionBar SceneLabel="@ActiveSceneName"
+                        Oficiales="@moduleOficiales"
+                        EscrutadoGeneral="@EffectiveEscrutadoGeneral"
+                        EscrutadoCircunscripcion="@currentSnapshot?.Escrutado"
+                        IsSubCircunscripcion="@IsSubCircunscripcion"
                         Disabled="@(!CanExecute)"
                         OnAction="RunSceneActionAsync" />
 
@@ -112,24 +153,56 @@
         {
             case FaldonMode.General:
                 <div class="row g-3">
-                    <div class="col-12 col-md-7">
-                        <div class="ws-subcard">
+                    <div class="col-12 col-lg-8">
+                        <div class="ws-subcard h-100">
                             <div class="ws-control-group-title">Transiciones y Animación</div>
-                            <div class="d-flex flex-wrap gap-2">
-                                <button class="ws-btn ws-btn-live-outline" @onclick="() => RunCommandAsync(GraphicCommand.PrimerosResultadosActiva)" disabled="@(!CanExecute)">Primeros ON</button>
-                                <button class="ws-btn ws-btn-amber-outline" @onclick="() => RunCommandAsync(GraphicCommand.PrimerosResultadosDesactiva)" disabled="@(!CanExecute)">Primeros OFF</button>
-                                <button class="ws-btn ws-btn-primary-outline" @onclick="() => RunCommandAsync(GraphicCommand.AnimacionSondeoActiva)" disabled="@(!CanExecute)">Animación Sondeo ON</button>
-                                <button class="ws-btn ws-btn-amber-outline" @onclick="() => RunCommandAsync(GraphicCommand.AnimacionSondeoDesactiva)" disabled="@(!CanExecute)">Animación Sondeo OFF</button>
-                                <button class="ws-btn ws-btn-amber" @onclick="() => RunCommandAsync(GraphicCommand.DeSondeoAOficiales)" disabled="@(!CanExecute)">De Sondeo a Oficiales</button>
+                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                <button type="button"
+                                        class="ws-toggle-btn @(moduleState.PrimerosResultadosEnabled ? "is-on" : "is-off")"
+                                        aria-pressed="@moduleState.PrimerosResultadosEnabled"
+                                        disabled="@(!CanExecute)"
+                                        @onclick="TogglePrimerosResultadosAsync">
+                                    <span class="ws-toggle-track" aria-hidden="true"><span class="ws-toggle-thumb"></span></span>
+                                    <span>Primeros Resultados</span>
+                                    <span class="ws-toggle-state">@(moduleState.PrimerosResultadosEnabled ? "ON" : "OFF")</span>
+                                </button>
+
+                                <button type="button"
+                                        class="ws-toggle-btn @(moduleState.AnimacionSondeoEnabled ? "is-on" : "is-off")"
+                                        aria-pressed="@moduleState.AnimacionSondeoEnabled"
+                                        disabled="@(!CanExecute)"
+                                        @onclick="ToggleAnimacionSondeoAsync">
+                                    <span class="ws-toggle-track" aria-hidden="true"><span class="ws-toggle-thumb"></span></span>
+                                    <span>Animación Sondeo</span>
+                                    <span class="ws-toggle-state">@(moduleState.AnimacionSondeoEnabled ? "ON" : "OFF")</span>
+                                </button>
+
+                                <button type="button"
+                                        class="ws-btn ws-btn-amber"
+                                        @onclick="TransitionSondeoToOficialesAsync"
+                                        disabled="@(!CanExecute)">
+                                    De Sondeo a Oficiales
+                                </button>
                             </div>
                         </div>
                     </div>
-                    <div class="col-12 col-md-5">
+
+                    <div class="col-12 col-lg-4">
                         <div class="ws-subcard h-100">
                             <div class="ws-control-group-title">Ámbito de Elecciones</div>
-                            <div class="d-flex flex-wrap gap-2">
-                                <button class="ws-btn" @onclick="() => RunCommandAsync(GraphicCommand.CambioEleccionesNacional)" disabled="@(!CanExecute)">Elecciones Nacional</button>
-                                <button class="ws-btn" @onclick="() => RunCommandAsync(GraphicCommand.CambioEleccionesEuropa)" disabled="@(!CanExecute)">Elecciones Europa</button>
+                            <div class="ws-seg-group w-100" role="group" aria-label="Ámbito Nacional o Europa">
+                                <button type="button"
+                                        class="ws-seg-btn @(!moduleState.AmbitoEuropaEnabled ? "active" : string.Empty)"
+                                        disabled="@(!CanExecute)"
+                                        @onclick="() => SetAmbitoEuropaAsync(false)">
+                                    Nacional
+                                </button>
+                                <button type="button"
+                                        class="ws-seg-btn @(moduleState.AmbitoEuropaEnabled ? "active" : string.Empty)"
+                                        disabled="@(!CanExecute)"
+                                        @onclick="() => SetAmbitoEuropaAsync(true)">
+                                    Europa
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -142,8 +215,8 @@
                         <div class="ws-subcard h-100">
                             <div class="ws-control-group-title">Ticker Votos</div>
                             <div class="d-flex gap-2">
-                                <button class="ws-btn ws-btn-live flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerVotosEntra)" disabled="@(!CanExecute)">Entra</button>
-                                <button class="ws-btn ws-btn-amber flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerVotosSale)" disabled="@(!CanExecute)">Sale</button>
+                                <button class="ws-btn ws-btn-live flex-fill" type="button" @onclick="() => RunCommandAsync(GraphicCommand.TickerVotosEntra)" disabled="@(!CanExecute)">Entra</button>
+                                <button class="ws-btn ws-btn-amber flex-fill" type="button" @onclick="() => RunCommandAsync(GraphicCommand.TickerVotosSale)" disabled="@(!CanExecute)">Sale</button>
                             </div>
                         </div>
                     </div>
@@ -151,8 +224,8 @@
                         <div class="ws-subcard h-100">
                             <div class="ws-control-group-title">Ticker Históricos</div>
                             <div class="d-flex gap-2">
-                                <button class="ws-btn ws-btn-live flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerHistoricosEntra)" disabled="@(!CanExecute)">Entra</button>
-                                <button class="ws-btn ws-btn-amber flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerHistoricosSale)" disabled="@(!CanExecute)">Sale</button>
+                                <button class="ws-btn ws-btn-live flex-fill" type="button" @onclick="() => RunCommandAsync(GraphicCommand.TickerHistoricosEntra)" disabled="@(!CanExecute)">Entra</button>
+                                <button class="ws-btn ws-btn-amber flex-fill" type="button" @onclick="() => RunCommandAsync(GraphicCommand.TickerHistoricosSale)" disabled="@(!CanExecute)">Sale</button>
                             </div>
                         </div>
                     </div>
@@ -160,8 +233,8 @@
                         <div class="ws-subcard h-100">
                             <div class="ws-control-group-title">Ticker Fotos</div>
                             <div class="d-flex gap-2">
-                                <button class="ws-btn ws-btn-live flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerFotosEntra)" disabled="@(!CanExecute)">Entra</button>
-                                <button class="ws-btn ws-btn-amber flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerFotosSale)" disabled="@(!CanExecute)">Sale</button>
+                                <button class="ws-btn ws-btn-live flex-fill" type="button" @onclick="() => RunCommandAsync(GraphicCommand.TickerFotosEntra)" disabled="@(!CanExecute)">Entra</button>
+                                <button class="ws-btn ws-btn-amber flex-fill" type="button" @onclick="() => RunCommandAsync(GraphicCommand.TickerFotosSale)" disabled="@(!CanExecute)">Sale</button>
                             </div>
                         </div>
                     </div>
@@ -169,9 +242,9 @@
                         <div class="ws-subcard h-100">
                             <div class="ws-control-group-title">Ticker TD</div>
                             <div class="d-flex gap-2 flex-wrap">
-                                <button class="ws-btn ws-btn-live flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDEntra)" disabled="@(!CanExecute)">Entra</button>
-                                <button class="ws-btn ws-btn-primary flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDActualiza)" disabled="@(!CanExecute)">Actualiza</button>
-                                <button class="ws-btn ws-btn-amber flex-fill" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDSale)" disabled="@(!CanExecute)">Sale</button>
+                                <button class="ws-btn ws-btn-live flex-fill" type="button" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDEntra)" disabled="@(!CanExecute)">Entra</button>
+                                <button class="ws-btn ws-btn-primary flex-fill" type="button" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDActualiza)" disabled="@(!CanExecute)">Actualiza</button>
+                                <button class="ws-btn ws-btn-amber flex-fill" type="button" @onclick="() => RunCommandAsync(GraphicCommand.TickerTDSale)" disabled="@(!CanExecute)">Sale</button>
                             </div>
                         </div>
                     </div>
@@ -181,25 +254,33 @@
             case FaldonMode.Sedes:
                 <div class="ws-subcard d-flex align-items-center justify-content-between flex-wrap gap-3">
                     <div>
-                        <div class="ws-control-group-title">Partido en Sede (selección lateral o doble clic)</div>
+                        <div class="ws-control-group-title">Partido en Sede (selección en tabla inferior o doble clic)</div>
                         <div class="fw-semibold">
-                            @(SelectedParty is not null
-                                ? $"{SelectedParty.Siglas} ({SelectedParty.Codigo})"
-                                : "Selecciona un partido en la lista derecha")
+                            @if (SelectedParty is not null)
+                            {
+                                <span class="ws-party-pill">@SelectedParty.Siglas <span>(@SelectedParty.Codigo)</span></span>
+                            }
+                            else
+                            {
+                                <span class="text-muted">Selecciona un partido en la tabla inferior</span>
+                            }
                         </div>
                     </div>
                     <div class="d-flex flex-wrap gap-2">
                         <button class="ws-btn ws-btn-live"
+                                type="button"
                                 @onclick="() => RunPartyCommandAsync(GraphicCommand.SedesEntra)"
                                 disabled="@(!CanExecute || SelectedParty is null)">
                             Sedes Entra
                         </button>
                         <button class="ws-btn ws-btn-primary"
+                                type="button"
                                 @onclick="() => RunPartyCommandAsync(GraphicCommand.SedesEncadena)"
                                 disabled="@(!CanExecute || SelectedParty is null)">
                             Sedes Encadena
                         </button>
                         <button class="ws-btn ws-btn-amber"
+                                type="button"
                                 @onclick="() => RunCommandAsync(GraphicCommand.SedesSale)"
                                 disabled="@(!CanExecute)">
                             Sedes Sale
@@ -216,7 +297,7 @@
                             <div class="row g-2 align-items-center mb-3">
                                 <div class="col-auto">
                                     <select class="form-select form-select-sm" @bind="videoSelectionMode">
-                                        <option value="party">Por partido (tabla lateral)</option>
+                                        <option value="party">Por partido (tabla inferior)</option>
                                         <option value="slot">Por fuente de vídeo (Slots 1-6)</option>
                                     </select>
                                 </div>
@@ -241,11 +322,10 @@
                                 }
                             </div>
                             <div class="d-flex flex-wrap gap-2">
-                                <button class="ws-btn" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoPrepara)" disabled="@(!CanExecute || !HasVideoTarget)">Prepara</button>
-                                <button class="ws-btn ws-btn-live" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoIn)" disabled="@(!CanExecute || !HasVideoTarget)">Video In</button>
-                                <button class="ws-btn ws-btn-amber" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOut)" disabled="@(!CanExecute || !HasVideoTarget)">Video Out</button>
-                                <button class="ws-btn ws-btn-live-outline" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoInTodos)" disabled="@(!CanExecute)">In Todos</button>
-                                <button class="ws-btn ws-btn-amber-outline" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOutTodos)" disabled="@(!CanExecute)">Out Todos</button>
+                                <button class="ws-btn ws-btn-live" type="button" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoIn)" disabled="@(!CanExecute || !HasVideoTarget)">Video In</button>
+                                <button class="ws-btn ws-btn-amber" type="button" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOut)" disabled="@(!CanExecute || !HasVideoTarget)">Video Out</button>
+                                <button class="ws-btn ws-btn-live-outline" type="button" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoInTodos)" disabled="@(!CanExecute)">In Todos</button>
+                                <button class="ws-btn ws-btn-amber-outline" type="button" @onclick="() => ExecuteVideoCommandAsync(GraphicCommand.VideoOutTodos)" disabled="@(!CanExecute)">Out Todos</button>
                             </div>
                         </div>
                     </div>
@@ -254,10 +334,10 @@
                         <div class="ws-subcard h-100">
                             <div class="ws-control-group-title">Rótulos Prime</div>
                             <div class="d-flex flex-wrap gap-2">
-                                <button class="ws-btn ws-btn-live" @onclick="() => RunCommandAsync(GraphicCommand.PrimeSubirRotulosTD)" disabled="@(!CanExecute)">Subir TD</button>
-                                <button class="ws-btn ws-btn-amber" @onclick="() => RunCommandAsync(GraphicCommand.PrimeBajarRotulosTD)" disabled="@(!CanExecute)">Bajar TD</button>
-                                <button class="ws-btn ws-btn-live-outline" @onclick="() => RunCommandAsync(GraphicCommand.PrimeSubirRotulosEspeciales)" disabled="@(!CanExecute)">Subir Especiales</button>
-                                <button class="ws-btn ws-btn-amber-outline" @onclick="() => RunCommandAsync(GraphicCommand.PrimeBajarRotulosEspeciales)" disabled="@(!CanExecute)">Bajar Especiales</button>
+                                <button class="ws-btn ws-btn-live" type="button" @onclick="() => RunCommandAsync(GraphicCommand.PrimeSubirRotulosTD)" disabled="@(!CanExecute)">Subir TD</button>
+                                <button class="ws-btn ws-btn-amber" type="button" @onclick="() => RunCommandAsync(GraphicCommand.PrimeBajarRotulosTD)" disabled="@(!CanExecute)">Bajar TD</button>
+                                <button class="ws-btn ws-btn-live-outline" type="button" @onclick="() => RunCommandAsync(GraphicCommand.PrimeSubirRotulosEspeciales)" disabled="@(!CanExecute)">Subir Especiales</button>
+                                <button class="ws-btn ws-btn-amber-outline" type="button" @onclick="() => RunCommandAsync(GraphicCommand.PrimeBajarRotulosEspeciales)" disabled="@(!CanExecute)">Bajar Especiales</button>
                             </div>
                         </div>
                     </div>
@@ -268,15 +348,15 @@
                 <div class="ws-subcard mb-3">
                     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
                         <div class="d-flex gap-2">
-                            <button class="ws-btn ws-btn-live" @onclick="EnterPactosAsync" disabled="@(!CanExecute)">Pactos Entra</button>
-                            <button class="ws-btn" @onclick="ResetPactosAsync" disabled="@(!CanExecute)">Pactos Reinicio</button>
-                            <button class="ws-btn ws-btn-amber" @onclick="ExitPactosAsync" disabled="@(!CanExecute)">Pactos Sale</button>
+                            <button class="ws-btn ws-btn-live" type="button" @onclick="EnterPactosAsync" disabled="@(!CanExecute)">Pactos Entra</button>
+                            <button class="ws-btn" type="button" @onclick="ResetPactosAsync" disabled="@(!CanExecute)">Pactos Reinicio</button>
+                            <button class="ws-btn ws-btn-amber" type="button" @onclick="ExitPactosAsync" disabled="@(!CanExecute)">Pactos Sale</button>
                         </div>
-                        <div class="d-flex gap-2">
-                            <button class="ws-btn ws-btn-live-outline" @onclick="AddLeftAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Izquierda (@(SelectedParty?.Siglas ?? "-"))</button>
-                            <button class="ws-btn ws-btn-amber-outline" @onclick="RemoveLeftAsync" disabled="@(!CanExecute || leftParties.Count == 0)">- Izquierda</button>
-                            <button class="ws-btn ws-btn-primary-outline" @onclick="AddRightAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Derecha (@(SelectedParty?.Siglas ?? "-"))</button>
-                            <button class="ws-btn ws-btn-amber-outline" @onclick="RemoveRightAsync" disabled="@(!CanExecute || rightParties.Count == 0)">- Derecha</button>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button class="ws-btn ws-btn-live-outline" type="button" @onclick="AddLeftAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Izquierda (@(SelectedParty?.Siglas ?? "-"))</button>
+                            <button class="ws-btn ws-btn-amber-outline" type="button" @onclick="RemoveLeftAsync" disabled="@(!CanExecute || leftParties.Count == 0)">- Izquierda</button>
+                            <button class="ws-btn ws-btn-primary-outline" type="button" @onclick="AddRightAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Derecha (@(SelectedParty?.Siglas ?? "-"))</button>
+                            <button class="ws-btn ws-btn-amber-outline" type="button" @onclick="RemoveRightAsync" disabled="@(!CanExecute || rightParties.Count == 0)">- Derecha</button>
                         </div>
                     </div>
                 </div>
@@ -334,16 +414,17 @@
 
             case FaldonMode.CuentaAtras:
                 <div class="ws-subcard d-flex align-items-center gap-3">
-                    <label class="form-label mb-0 fw-semibold">Segundos de cuenta atrás:</label>
-                    <input class="form-control form-control-sm ws-num" style="max-width: 120px;" type="number" min="0" @bind="sceneSeconds" />
+                    <label for="faldon-countdown-input" class="form-label mb-0 fw-semibold">Segundos de cuenta atrás:</label>
+                    <input id="faldon-countdown-input" class="form-control form-control-sm ws-num" style="max-width: 120px;" type="number" min="0" @bind="sceneSeconds" />
                 </div>
                 break;
         }
     </section>
 
     <PartySidebarTable Parties="@availableParties"
+                       Snapshot="@currentSnapshot"
                        SelectedPartyCode="@selectedPartyCode"
-                       Oficiales="@globalSettings.Oficiales"
+                       Oficiales="@moduleOficiales"
                        ShowUltimoIndicators="false"
                        Loading="@loadingParties"
                        OnPartySelected="OnPartySelected"
@@ -362,14 +443,18 @@
         CuentaAtras
     }
 
+    private static readonly CultureInfo EsCulture = CultureInfo.GetCultureInfo("es-ES");
     private FaldonMode activeMode = FaldonMode.General;
     private string operatorId = WorkspaceResolver.DefaultFaldonOperator;
     private GlobalOperationalSettings globalSettings = new();
     private ModuleOperationalState moduleState = new() { Module = GraphicModule.Faldon };
+    private int moduleElectionSlot = 1;
+    private bool moduleOficiales;
 
     private IReadOnlyList<CircunscripcionSummary> circunscripciones = [];
     private IReadOnlyList<MedioSummary> medios = [new("RTVE", "RTVE")];
     private IReadOnlyList<PartidoSnapshot> availableParties = [];
+    private BrainStormSnapshot? currentSnapshot;
     private IReadOnlyList<VideoSourceOptions> videoSources = [];
     private readonly List<PartidoSnapshot> leftParties = [];
     private readonly List<PartidoSnapshot> rightParties = [];
@@ -386,7 +471,7 @@
 
     private string ActiveSceneName => activeMode switch
     {
-        FaldonMode.General => globalSettings.Oficiales ? "Escrutinio" : "Sondeo",
+        FaldonMode.General => moduleOficiales ? "Escrutinio" : "Sondeo",
         FaldonMode.Ticker => "TICKER",
         FaldonMode.Sedes => "SEDES",
         FaldonMode.VideoPrime => "TICKER",
@@ -397,6 +482,13 @@
 
     private PartidoSnapshot? SelectedParty => availableParties.FirstOrDefault(p =>
         string.Equals(p.Codigo, selectedPartyCode, StringComparison.OrdinalIgnoreCase));
+
+    private double? EffectiveEscrutadoGeneral => currentSnapshot is null
+        ? null
+        : (currentSnapshot.EscrutadoGeneral > 0 ? currentSnapshot.EscrutadoGeneral : currentSnapshot.Escrutado);
+
+    private bool IsSubCircunscripcion => !string.IsNullOrWhiteSpace(selectedCircunscripcionCodigo)
+        && !string.Equals(selectedCircunscripcionCodigo, "9900000", StringComparison.Ordinal);
 
     private bool CanOperate => AuthorizationService.CanOperate(operatorId, GraphicModule.Faldon);
     private bool IsOwner => ModuleLockService.IsOwner(GraphicModule.Faldon, operatorId);
@@ -413,6 +505,9 @@
 
         globalSettings = GlobalSettingsService.GetSettings();
         moduleState = StateService.GetState(GraphicModule.Faldon);
+        moduleElectionSlot = moduleState.ElectionSlot;
+        moduleOficiales = moduleState.Oficiales;
+
         videoSources = LoadVideoSourcesFromConfig();
         selectedVideoSlot = videoSources.FirstOrDefault()?.Slot ?? 1;
 
@@ -462,6 +557,73 @@
         activeMode = mode;
     }
 
+    private async Task SetModuleOficialesAsync(bool oficiales)
+    {
+        if (moduleOficiales == oficiales)
+        {
+            return;
+        }
+
+        moduleOficiales = oficiales;
+        moduleState = StateService.ConfigureModule(GraphicModule.Faldon, moduleElectionSlot, moduleOficiales);
+        await LoadPartiesAsync();
+    }
+
+    private async Task OnModuleElectionSlotChangedAsync(ChangeEventArgs args)
+    {
+        if (!int.TryParse(args.Value?.ToString(), out var parsedSlot))
+        {
+            return;
+        }
+
+        var clamped = Math.Clamp(parsedSlot, 1, 3);
+        if (clamped == moduleElectionSlot)
+        {
+            return;
+        }
+
+        moduleElectionSlot = clamped;
+        moduleState = StateService.ConfigureModule(GraphicModule.Faldon, moduleElectionSlot, moduleOficiales);
+        await ReloadReferenceDataAsync();
+        await LoadPartiesAsync();
+    }
+
+    private async Task TogglePrimerosResultadosAsync()
+    {
+        var nextCommand = moduleState.PrimerosResultadosEnabled
+            ? GraphicCommand.PrimerosResultadosDesactiva
+            : GraphicCommand.PrimerosResultadosActiva;
+        await RunCommandAsync(nextCommand);
+    }
+
+    private async Task ToggleAnimacionSondeoAsync()
+    {
+        var nextCommand = moduleState.AnimacionSondeoEnabled
+            ? GraphicCommand.AnimacionSondeoDesactiva
+            : GraphicCommand.AnimacionSondeoActiva;
+        await RunCommandAsync(nextCommand);
+    }
+
+    private async Task SetAmbitoEuropaAsync(bool europa)
+    {
+        var command = europa
+            ? GraphicCommand.CambioEleccionesEuropa
+            : GraphicCommand.CambioEleccionesNacional;
+        await RunCommandAsync(command);
+    }
+
+    private async Task TransitionSondeoToOficialesAsync()
+    {
+        var hadSondeo = !moduleOficiales;
+        moduleOficiales = true;
+        moduleState = StateService.ConfigureModule(GraphicModule.Faldon, moduleElectionSlot, moduleOficiales);
+        await RunCommandAsync(GraphicCommand.DeSondeoAOficiales);
+        if (hadSondeo)
+        {
+            await LoadPartiesAsync();
+        }
+    }
+
     private void OnPartySelected(PartidoSnapshot party)
     {
         selectedPartyCode = party.Codigo;
@@ -501,12 +663,12 @@
         var previousCirc = selectedCircunscripcionCodigo;
         var previousMedio = selectedMedioCodigo;
 
-        circunscripciones = await DataService.GetCircunscripcionesAsync(globalSettings.ElectionSlot, globalSettings.ConnectionType);
+        circunscripciones = await DataService.GetCircunscripcionesAsync(moduleElectionSlot, globalSettings.ConnectionType);
         selectedCircunscripcionCodigo = circunscripciones.FirstOrDefault(x => x.Codigo == previousCirc)?.Codigo
             ?? circunscripciones.FirstOrDefault()?.Codigo
             ?? string.Empty;
 
-        var loadedMedios = await DataService.GetMediosAsync(globalSettings.ElectionSlot, globalSettings.ConnectionType);
+        var loadedMedios = await DataService.GetMediosAsync(moduleElectionSlot, globalSettings.ConnectionType);
         var list = new List<MedioSummary> { new("RTVE", "RTVE") };
         list.AddRange(loadedMedios
             .Where(x => !string.IsNullOrWhiteSpace(x.Codigo) && !string.Equals(x.Codigo, "RTVE", StringComparison.OrdinalIgnoreCase))
@@ -522,10 +684,12 @@
         loadingParties = true;
         try
         {
-            var snapshot = await DataService.GetSnapshotAsync(BuildQuery(), globalSettings.Oficiales);
+            var snapshot = await DataService.GetSnapshotAsync(BuildQuery(), moduleOficiales);
+            currentSnapshot = snapshot;
             availableParties = snapshot.Partidos
                 .Where(x => !string.IsNullOrWhiteSpace(x.Codigo))
                 .OrderByDescending(GetDisplayEscanos)
+                .ThenByDescending(x => x.PorcentajeVoto)
                 .ThenByDescending(x => x.Votos)
                 .ToList();
 
@@ -557,7 +721,7 @@
             SceneSeconds = activeMode == FaldonMode.CuentaAtras && sceneSeconds > 0 ? sceneSeconds : null,
             Command = GraphicCommand.None,
             Target = globalSettings.Target,
-            Oficiales = globalSettings.Oficiales,
+            Oficiales = moduleOficiales,
             ExportName = globalSettings.ExportName,
             Query = BuildQuery()
         };
@@ -580,7 +744,7 @@
             Command = command,
             CommandValue = commandValue,
             Target = globalSettings.Target,
-            Oficiales = globalSettings.Oficiales,
+            Oficiales = moduleOficiales,
             ExportName = globalSettings.ExportName,
             Query = BuildQuery()
         };
@@ -674,17 +838,17 @@
         }
     }
 
-    private int GetDisplayEscanos(PartidoSnapshot p) => globalSettings.Oficiales ? p.Escanios : p.EscaniosHastaSondeo;
+    private int GetDisplayEscanos(PartidoSnapshot p) => moduleOficiales ? p.Escanios : p.EscaniosHastaSondeo;
 
-    private int TotalAvailableEscanos => Math.Max(1, availableParties.Sum(GetDisplayEscanos));
+    private int TotalAvailableEscanos => Math.Max(1, currentSnapshot?.EscaniosTotales > 0 ? currentSnapshot.EscaniosTotales : availableParties.Sum(GetDisplayEscanos));
     private int LeftPactEscanos => leftParties.Sum(GetDisplayEscanos);
     private int RightPactEscanos => rightParties.Sum(GetDisplayEscanos);
-    private string LeftPactPctCss => $"{Math.Clamp(LeftPactEscanos * 100.0 / TotalAvailableEscanos, 0, 100).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%";
-    private string RightPactPctCss => $"{Math.Clamp(RightPactEscanos * 100.0 / TotalAvailableEscanos, 0, 100).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%";
+    private string LeftPactPctCss => $"{Math.Clamp(LeftPactEscanos * 100.0 / TotalAvailableEscanos, 0, 100).ToString("0.##", CultureInfo.InvariantCulture)}%";
+    private string RightPactPctCss => $"{Math.Clamp(RightPactEscanos * 100.0 / TotalAvailableEscanos, 0, 100).ToString("0.##", CultureInfo.InvariantCulture)}%";
 
     private SnapshotQuery BuildQuery() => new()
     {
-        ElectionSlot = globalSettings.ElectionSlot,
+        ElectionSlot = moduleElectionSlot,
         ConnectionType = globalSettings.ConnectionType,
         Kind = SnapshotQueryKind.Circunscripcion,
         CircunscripcionCodigo = selectedCircunscripcionCodigo,
@@ -711,17 +875,17 @@
     {
         _ = InvokeAsync(async () =>
         {
-            var slotOrConnChanged = updated.ElectionSlot != globalSettings.ElectionSlot
-                                    || updated.ConnectionType != globalSettings.ConnectionType;
-            var modeChanged = updated.Oficiales != globalSettings.Oficiales;
+            var connChanged = updated.ConnectionType != globalSettings.ConnectionType;
+            var queryFilterChanged = updated.IncludeZeroSeats != globalSettings.IncludeZeroSeats
+                                     || updated.Avance != globalSettings.Avance;
             globalSettings = updated;
 
-            if (slotOrConnChanged)
+            if (connChanged)
             {
                 await ReloadReferenceDataAsync();
             }
 
-            if (slotOrConnChanged || modeChanged)
+            if (connChanged || queryFilterChanged)
             {
                 await LoadPartiesAsync();
             }
@@ -737,9 +901,24 @@
             return;
         }
 
-        _ = InvokeAsync(() =>
+        _ = InvokeAsync(async () =>
         {
+            var slotChanged = state.ElectionSlot != moduleElectionSlot;
+            var modeChanged = state.Oficiales != moduleOficiales;
             moduleState = state;
+            moduleElectionSlot = state.ElectionSlot;
+            moduleOficiales = state.Oficiales;
+
+            if (slotChanged)
+            {
+                await ReloadReferenceDataAsync();
+            }
+
+            if (slotChanged || modeChanged)
+            {
+                await LoadPartiesAsync();
+            }
+
             StateHasChanged();
         });
     }

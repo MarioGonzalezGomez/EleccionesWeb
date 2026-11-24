@@ -5,6 +5,7 @@
 @page "/operacion/diagnostico"
 @attribute [Authorize]
 @implements IDisposable
+@using System.Globalization
 @using Elecciones.Application.Abstractions
 @using Elecciones.Application.Models
 @using Elecciones.GraphicsGateway.Options
@@ -16,6 +17,7 @@
 @inject IOperationStateService StateService
 @inject IModuleLockService ModuleLockService
 @inject IOperationService OperationService
+@inject IEleccionesDataService DataService
 @inject ISignalDiagnosticsService DiagnosticsService
 @inject DatabaseChangeListenerService ChangeListenerService
 @inject AuthenticationStateProvider AuthenticationStateProvider
@@ -26,26 +28,25 @@
     <div class="ws-topbar-cluster">
         <span class="ws-brand-mark">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-                <line x1="8" y1="21" x2="16" y2="21"/>
-                <line x1="12" y1="17" x2="12" y2="21"/>
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                <line x1="8" y1="21" x2="16" y2="21" />
+                <line x1="12" y1="17" x2="12" y2="21" />
             </svg>
             Control General
         </span>
         <span class="ws-onair-pill @(faldonState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
-            <span class="ws-tally-dot"></span> FALDÓN: @(faldonState.IsOnAir ? faldonState.ActiveScene : "FUERA")
+            <span class="ws-tally-dot"></span>
+            FALDÓN: @(faldonState.IsOnAir ? faldonState.ActiveScene : "FUERA") · @(faldonState.Oficiales ? $"OFIC. ({FormatEscrutadoSlot(faldonState.ElectionSlot)}%)" : "SONDEO") · E@(faldonState.ElectionSlot)
         </span>
         <span class="ws-onair-pill @(cartonState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
-            <span class="ws-tally-dot"></span> CARTÓN: @(cartonState.IsOnAir ? cartonState.ActiveScene : "FUERA")
+            <span class="ws-tally-dot"></span>
+            CARTÓN: @(cartonState.IsOnAir ? cartonState.ActiveScene : "FUERA") · @(cartonState.Oficiales ? $"OFIC. ({FormatEscrutadoSlot(cartonState.ElectionSlot)}%)" : "SONDEO") · E@(cartonState.ElectionSlot)
         </span>
     </div>
 
     <div class="ws-topbar-cluster">
         <span class="ws-chip ws-chip-accent">
-            Elección @globalSnapshot.ElectionSlot · @GetConnectionLabel(globalSnapshot.ConnectionType) · @globalSnapshot.Target
-        </span>
-        <span class="ws-chip @(globalSnapshot.Oficiales ? "ws-chip-live" : "ws-chip-amber")">
-            @(globalSnapshot.Oficiales ? $"OFICIALES (Av.{globalSnapshot.Avance})" : "SONDEO")
+            @GetConnectionLabel(globalSnapshot.ConnectionType) · @globalSnapshot.Target · Av.@globalSnapshot.Avance
         </span>
         <span class="ws-chip @(globalSnapshot.AutoRefreshEnabled ? "ws-chip-live" : "")">
             Auto-Refresh: @(globalSnapshot.AutoRefreshEnabled ? $"ON ({globalSnapshot.AutoRefreshIntervalSeconds}s)" : "OFF")
@@ -71,7 +72,7 @@
     {
         <div class="ws-banner @(feedbackIsError ? "ws-banner-error" : "ws-banner-success") d-flex justify-content-between align-items-center mb-3" role="alert">
             <span>@feedbackMessage</span>
-            <button type="button" class="ws-icon-btn" @onclick="() => feedbackMessage = string.Empty">
+            <button type="button" class="ws-icon-btn" aria-label="Cerrar mensaje" @onclick="() => feedbackMessage = string.Empty">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="18" y1="6" x2="6" y2="18"></line>
                     <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -87,15 +88,7 @@
                 <div class="ws-panel h-100">
                     <div class="ws-control-group-title">Parámetros Globales de Emisión</div>
                     <div class="row g-2">
-                        <div class="col-6 col-md-4">
-                            <label class="form-label form-label-sm mb-1">Slot Elecciones</label>
-                            <select class="form-select form-select-sm" value="@globalSnapshot.ElectionSlot" @onchange="OnElectionSlotChanged">
-                                <option value="1">Elecciones 1</option>
-                                <option value="2">Elecciones 2</option>
-                                <option value="3">Elecciones 3</option>
-                            </select>
-                        </div>
-                        <div class="col-6 col-md-4">
+                        <div class="col-6 col-md-3">
                             <label class="form-label form-label-sm mb-1">Conexión BD</label>
                             <select class="form-select form-select-sm" value="@globalSnapshot.ConnectionType" @onchange="OnConnectionTypeChanged">
                                 <option value="0">Principal</option>
@@ -103,7 +96,7 @@
                                 <option value="2">Local</option>
                             </select>
                         </div>
-                        <div class="col-6 col-md-4">
+                        <div class="col-6 col-md-3">
                             <label class="form-label form-label-sm mb-1">Motor Gráfico (Target)</label>
                             <select class="form-select form-select-sm" value="@globalSnapshot.Target" @onchange="OnTargetChanged">
                                 <option value="@GraphicsTarget.Ipf">IPF</option>
@@ -111,18 +104,7 @@
                                 <option value="@GraphicsTarget.Both">Ambos (IPF + Prime)</option>
                             </select>
                         </div>
-                        <div class="col-6 col-md-4">
-                            <label class="form-label form-label-sm mb-1">Modo de Datos</label>
-                            <div class="ws-seg-group w-100">
-                                <button type="button" class="ws-seg-btn @(globalSnapshot.Oficiales ? "active" : "")" @onclick="() => SetOficiales(true)">
-                                    Oficiales
-                                </button>
-                                <button type="button" class="ws-seg-btn @(!globalSnapshot.Oficiales ? "active-amber" : "")" @onclick="() => SetOficiales(false)">
-                                    Sondeo
-                                </button>
-                            </div>
-                        </div>
-                        <div class="col-6 col-md-4">
+                        <div class="col-6 col-md-3">
                             <label class="form-label form-label-sm mb-1">Avance Participación</label>
                             <select class="form-select form-select-sm" value="@globalSnapshot.Avance" @onchange="OnAvanceChanged">
                                 <option value="0">Sin avance (0)</option>
@@ -131,7 +113,7 @@
                                 <option value="3">Avance 3</option>
                             </select>
                         </div>
-                        <div class="col-6 col-md-4">
+                        <div class="col-6 col-md-3">
                             <label class="form-label form-label-sm mb-1">Nombre Exportación CSV</label>
                             <input class="form-control form-control-sm" value="@globalSnapshot.ExportName" @onchange="OnExportNameChanged" />
                         </div>
@@ -140,6 +122,31 @@
                                 <input id="chkZeroSeats" class="form-check-input" type="checkbox" checked="@globalSnapshot.IncludeZeroSeats" @onchange="OnIncludeZeroSeatsChanged" />
                                 <label class="form-check-label small" for="chkZeroSeats">Incluir partidos con 0 escaños en envíos y exportaciones</label>
                             </div>
+                        </div>
+                    </div>
+
+                    <div class="ws-subcard mt-3">
+                        <div class="ws-control-group-title mb-2">Sincronización Puntual a Ambos Módulos (Faldón + Cartón)</div>
+                        <div class="d-flex flex-wrap align-items-center gap-2">
+                            <div class="ws-inline-field">
+                                <label for="sync-slot-select">Elección:</label>
+                                <select id="sync-slot-select" class="form-select form-select-sm ws-select-slot" @bind="syncElectionSlot">
+                                    <option value="1">Elección 1</option>
+                                    <option value="2">Elección 2</option>
+                                    <option value="3">Elección 3</option>
+                                </select>
+                            </div>
+                            <div class="ws-seg-group ws-seg-compact" role="group" aria-label="Modo a sincronizar">
+                                <button type="button" class="ws-seg-btn @(syncOficiales ? "active" : "")" @onclick="() => syncOficiales = true">
+                                    Oficiales
+                                </button>
+                                <button type="button" class="ws-seg-btn @(!syncOficiales ? "active-amber" : "")" @onclick="() => syncOficiales = false">
+                                    Sondeo
+                                </button>
+                            </div>
+                            <button type="button" class="ws-btn ws-btn-primary-outline ms-auto" @onclick="SyncBothModules">
+                                Aplicar a Faldón y Cartón
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -181,14 +188,52 @@
             {
                 var state = StateService.GetState(module);
                 var lockInfo = GetModuleLockInfo(module);
+                var moduleLabel = module == GraphicModule.Faldon ? "FALDÓN" : "CARTÓN";
                 <div class="col-12 col-md-6">
                     <div class="ws-panel @(state.IsOnAir ? "ws-panel-live" : "")">
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="ws-control-group-title mb-0">Supervisión @(module == GraphicModule.Faldon ? "FALDÓN" : "CARTÓN")</span>
-                            <span class="ws-onair-pill @(state.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
-                                <span class="ws-tally-dot"></span> @(state.IsOnAir ? "EN AIRE" : "FUERA DE AIRE")
-                            </span>
+                        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                            <span class="ws-control-group-title mb-0">Supervisión @moduleLabel</span>
+                            <div class="d-flex align-items-center gap-2 flex-wrap">
+                                @if (state.Oficiales)
+                                {
+                                    <span class="ws-chip ws-chip-accent ws-mono">
+                                        Escrutinio Gral.: <strong>@FormatEscrutadoSlot(state.ElectionSlot)%</strong>
+                                    </span>
+                                }
+                                <span class="ws-onair-pill @(state.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
+                                    <span class="ws-tally-dot"></span> @(state.IsOnAir ? "EN AIRE" : "FUERA DE AIRE")
+                                </span>
+                            </div>
                         </div>
+
+                        <div class="ws-subcard mb-3">
+                            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                                <div class="ws-inline-field">
+                                    <label>Elección @moduleLabel:</label>
+                                    <select class="form-select form-select-sm ws-select-slot"
+                                            value="@state.ElectionSlot"
+                                            @onchange="e => OnSupervisedModuleSlotChanged(module, e)">
+                                        <option value="1">Elección 1</option>
+                                        <option value="2">Elección 2</option>
+                                        <option value="3">Elección 3</option>
+                                    </select>
+                                </div>
+
+                                <div class="ws-seg-group ws-seg-compact" role="group" aria-label="@($"Modo de datos de {moduleLabel}")">
+                                    <button type="button"
+                                            class="ws-seg-btn @(state.Oficiales ? "active" : "")"
+                                            @onclick="() => SetSupervisedModuleOficiales(module, true)">
+                                        Oficiales
+                                    </button>
+                                    <button type="button"
+                                            class="ws-seg-btn @(!state.Oficiales ? "active-amber" : "")"
+                                            @onclick="() => SetSupervisedModuleOficiales(module, false)">
+                                        Sondeo
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="ws-kpi-grid mb-3">
                             <div class="ws-kpi-item">
                                 <div class="ws-kpi-label">Escena activa</div>
@@ -209,6 +254,7 @@
                                 </div>
                             </div>
                         </div>
+
                         <div class="d-flex gap-2">
                             <button type="button" class="ws-btn ws-btn-amber-outline" @onclick="() => ForceUnlockModule(module)" disabled="@(!lockInfo.IsLocked)">
                                 Forzar Desbloqueo
@@ -301,6 +347,62 @@
                             <div class="col-3">
                                 <label class="form-label form-label-sm mb-1">BD</label>
                                 <input class="form-control form-control-sm" @bind="graphics.Ipf2.Bd" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="ws-subcard mb-2">
+                        <strong class="small d-block mb-2">Rutas de Datos CSV / JSON (Aislamiento por Módulo)</strong>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label form-label-sm mb-1">Carpeta CSV General</label>
+                                <input class="form-control form-control-sm" @bind="storage.CsvFolder" />
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label form-label-sm mb-1">Carpeta JSON General</label>
+                                <input class="form-control form-control-sm" @bind="storage.JsonFolder" />
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label form-label-sm mb-1">CSV específico Faldón (opcional)</label>
+                                <input class="form-control form-control-sm" @bind="faldonCsvFolderOverride" placeholder="Vacío = usa carpeta general" />
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label form-label-sm mb-1">CSV específico Cartón (opcional)</label>
+                                <input class="form-control form-control-sm" @bind="cartonCsvFolderOverride" placeholder="Vacío = usa carpeta general" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="ws-subcard mb-2">
+                        <strong class="small d-block mb-2">Nombres de Archivos CSV de Cartones (Nuevo Grafismo)</strong>
+                        <div class="row g-2">
+                            <div class="col-6 col-md-4">
+                                <label class="form-label form-label-sm mb-1">Participación</label>
+                                <input class="form-control form-control-sm ws-mono" @bind="storage.CartonCsvFiles.ParticipacionFileName" />
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <label class="form-label form-label-sm mb-1">Mayorías (Partidos)</label>
+                                <input class="form-control form-control-sm ws-mono" @bind="storage.CartonCsvFiles.MayoriasPartidosFileName" />
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <label class="form-label form-label-sm mb-1">Mayorías (Provincia)</label>
+                                <input class="form-control form-control-sm ws-mono" @bind="storage.CartonCsvFiles.MayoriasProvinciaFileName" />
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <label class="form-label form-label-sm mb-1">Estatal (Partidos)</label>
+                                <input class="form-control form-control-sm ws-mono" @bind="storage.CartonCsvFiles.EstatalPartidosFileName" />
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <label class="form-label form-label-sm mb-1">Estatal (Provincia)</label>
+                                <input class="form-control form-control-sm ws-mono" @bind="storage.CartonCsvFiles.EstatalProvinciaFileName" />
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <label class="form-label form-label-sm mb-1">Cuadraditos</label>
+                                <input class="form-control form-control-sm ws-mono" @bind="storage.CartonCsvFiles.CuadraditosFileName" />
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <label class="form-label form-label-sm mb-1">Último Escaño</label>
+                                <input class="form-control form-control-sm ws-mono" @bind="storage.CartonCsvFiles.UltimoEscanoFileName" />
                             </div>
                         </div>
                     </div>
@@ -480,16 +582,24 @@
     }
 
     private static readonly GraphicModule[] SupervisedModules = [GraphicModule.Faldon, GraphicModule.Carton];
+    private static readonly CultureInfo EsCulture = CultureInfo.GetCultureInfo("es-ES");
+    private readonly Dictionary<int, double> escrutadoBySlot = new();
 
     private ControlTab activeTab = ControlTab.GlobalLive;
     private GlobalOperationalSettings globalSnapshot = new();
     private GraphicsEndpointsOptions graphics = new();
     private OperationalOptions operational = new();
+    private StorageOptions storage = new();
+    private string faldonCsvFolderOverride = string.Empty;
+    private string cartonCsvFolderOverride = string.Empty;
     private ModuleOperationalState faldonState = new() { Module = GraphicModule.Faldon };
     private ModuleOperationalState cartonState = new() { Module = GraphicModule.Carton };
     private IReadOnlyList<ModuleLockInfo> lockStates = [];
     private IReadOnlyList<SignalDiagnosticEntry> entries = [];
     private IReadOnlyList<EndpointConnectivityStatus> connectivityStatuses = [];
+
+    private int syncElectionSlot = 1;
+    private bool syncOficiales;
 
     private string currentOperatorId = "op_admin";
     private string feedbackMessage = string.Empty;
@@ -516,6 +626,9 @@
         globalSnapshot = GlobalSettings.GetSettings();
         LoadTechnicalConfig();
         RefreshStatesAndDiagnostics();
+        await RefreshEscrutadoBySlotAsync();
+        syncElectionSlot = faldonState.ElectionSlot;
+        syncOficiales = faldonState.Oficiales;
 
         GlobalSettings.OnSettingsChanged += HandleGlobalSettingsChanged;
         StateService.OnStateChanged += HandleModuleStateChanged;
@@ -528,6 +641,9 @@
         var snapshot = ConfigService.GetSnapshot();
         graphics = snapshot.GraphicsEndpoints;
         operational = snapshot.Operational;
+        storage = snapshot.Storage;
+        faldonCsvFolderOverride = storage.ResolveCsvFolderOverride("Faldon");
+        cartonCsvFolderOverride = storage.ResolveCsvFolderOverride("Carton");
     }
 
     private void RefreshStatesAndDiagnostics()
@@ -538,30 +654,49 @@
         entries = DiagnosticsService.GetRecentEntries(maxCount: 100);
     }
 
+    private async Task RefreshEscrutadoBySlotAsync()
+    {
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            try
+            {
+                var snap = await DataService.GetSnapshotAsync(new SnapshotQuery
+                {
+                    ElectionSlot = slot,
+                    ConnectionType = globalSnapshot.ConnectionType,
+                    Kind = SnapshotQueryKind.Circunscripcion,
+                    CircunscripcionCodigo = "9900000"
+                }, oficiales: true);
+
+                escrutadoBySlot[slot] = snap.EscrutadoGeneral > 0 ? snap.EscrutadoGeneral : snap.Escrutado;
+            }
+            catch
+            {
+                escrutadoBySlot[slot] = 0;
+            }
+        }
+    }
+
+    private string FormatEscrutadoSlot(int slot)
+        => escrutadoBySlot.TryGetValue(slot, out var val) ? val.ToString("0.00", EsCulture) : "0,00";
+
     private ModuleLockInfo GetModuleLockInfo(GraphicModule module) =>
         lockStates.FirstOrDefault(x => x.Module == module) ?? new ModuleLockInfo { Module = module };
 
     private static string GetConnectionLabel(int connectionType) => connectionType switch
     {
-        0 => "Principal",
-        1 => "Reserva",
-        2 => "Local",
+        0 => "BD Principal",
+        1 => "BD Reserva",
+        2 => "BD Local",
         _ => $"Conn {connectionType}"
     };
 
-    private void OnElectionSlotChanged(ChangeEventArgs e)
-    {
-        if (int.TryParse(e.Value?.ToString(), out var slot))
-        {
-            GlobalSettings.UpdateSettings(s => s with { ElectionSlot = slot });
-        }
-    }
-
-    private void OnConnectionTypeChanged(ChangeEventArgs e)
+    private async Task OnConnectionTypeChanged(ChangeEventArgs e)
     {
         if (int.TryParse(e.Value?.ToString(), out var conn))
         {
             GlobalSettings.UpdateSettings(s => s with { ConnectionType = conn });
+            await RefreshEscrutadoBySlotAsync();
         }
     }
 
@@ -571,11 +706,6 @@
         {
             GlobalSettings.UpdateSettings(s => s with { Target = target });
         }
-    }
-
-    private void SetOficiales(bool oficiales)
-    {
-        GlobalSettings.UpdateSettings(s => s with { Oficiales = oficiales });
     }
 
     private void OnAvanceChanged(ChangeEventArgs e)
@@ -601,6 +731,38 @@
         GlobalSettings.UpdateSettings(s => s with { IncludeZeroSeats = enabled });
     }
 
+    private void SyncBothModules()
+    {
+        StateService.SyncAllModules(syncElectionSlot, syncOficiales);
+        GlobalSettings.UpdateSettings(s => s with
+        {
+            ElectionSlot = syncElectionSlot,
+            Oficiales = syncOficiales
+        });
+        RefreshStatesAndDiagnostics();
+        feedbackMessage = $"Faldón y Cartón sincronizados a Elección {syncElectionSlot} · {(syncOficiales ? "Oficiales" : "Sondeo")}.";
+        feedbackIsError = false;
+    }
+
+    private void OnSupervisedModuleSlotChanged(GraphicModule module, ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var slot))
+        {
+            return;
+        }
+
+        var current = StateService.GetState(module);
+        StateService.ConfigureModule(module, slot, current.Oficiales);
+        RefreshStatesAndDiagnostics();
+    }
+
+    private void SetSupervisedModuleOficiales(GraphicModule module, bool oficiales)
+    {
+        var current = StateService.GetState(module);
+        StateService.ConfigureModule(module, current.ElectionSlot, oficiales);
+        RefreshStatesAndDiagnostics();
+    }
+
     private void OnAutoRefreshEnabledChanged(ChangeEventArgs e)
     {
         var enabled = e.Value is bool b && b;
@@ -622,6 +784,7 @@
         {
             var count = await ChangeListenerService.CheckAndDispatchUpdatesOnceAsync();
             globalSnapshot = GlobalSettings.GetSettings();
+            await RefreshEscrutadoBySlotAsync();
             feedbackMessage = count > 0
                 ? $"Actualización automática disparada ({count} señal(es))."
                 : globalSnapshot.LastAutoRefreshStatus;
@@ -655,7 +818,7 @@
             var activeState = StateService.GetState(module);
             var query = activeState.ActiveQuery ?? new SnapshotQuery
             {
-                ElectionSlot = globalSnapshot.ElectionSlot,
+                ElectionSlot = activeState.ElectionSlot,
                 ConnectionType = globalSnapshot.ConnectionType,
                 Kind = SnapshotQueryKind.Circunscripcion,
                 CircunscripcionCodigo = "9900000",
@@ -670,7 +833,7 @@
                 Action = OperationActionType.Reset,
                 Command = GraphicCommand.None,
                 Scene = string.IsNullOrWhiteSpace(activeState.ActiveScene) ? "ESCRUTINIO" : activeState.ActiveScene,
-                Oficiales = globalSnapshot.Oficiales,
+                Oficiales = activeState.Oficiales,
                 Target = globalSnapshot.Target,
                 Query = query,
                 ExportName = globalSnapshot.ExportName
@@ -693,10 +856,14 @@
         feedbackIsError = false;
         try
         {
+            storage.CsvFoldersByModule["Faldon"] = faldonCsvFolderOverride?.Trim() ?? string.Empty;
+            storage.CsvFoldersByModule["Carton"] = cartonCsvFolderOverride?.Trim() ?? string.Empty;
+
             var result = await ConfigService.SaveAsync(new OperationalConfigurationSnapshot
             {
                 GraphicsEndpoints = graphics,
-                Operational = operational
+                Operational = operational,
+                Storage = storage
             });
 
             feedbackMessage = result.Message;

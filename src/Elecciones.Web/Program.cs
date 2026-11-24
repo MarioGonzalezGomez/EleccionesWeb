@@ -76,25 +76,31 @@ builder.Services.AddSingleton<IModuleLockService, ModuleLockService>();
 builder.Services.AddSingleton<ConfiguredOperatorAuthorizationService>();
 builder.Services.AddSingleton<IOperatorAuthorizationService>(sp => sp.GetRequiredService<ConfiguredOperatorAuthorizationService>());
 builder.Services.AddSingleton<IOperatorAuthenticationService>(sp => sp.GetRequiredService<ConfiguredOperatorAuthorizationService>());
+var defaultElectionSlot = Math.Clamp(dbOptions.DefaultElectionSlot, 1, 3);
 builder.Services.AddSingleton<ISignalDiagnosticsService, InMemorySignalDiagnosticsService>();
-builder.Services.AddSingleton<IOperationStateService, OperationStateService>();
+builder.Services.AddSingleton<IOperationStateService>(_ =>
+    new OperationStateService(defaultElectionSlot, defaultOficiales: false));
+var defaultPollingSeconds = Math.Clamp(builder.Configuration.GetValue<int?>("Database:ChangePollingSeconds") ?? 3, 2, 60);
 builder.Services.AddSingleton<IGlobalOperationalSettingsService>(_ =>
     new GlobalOperationalSettingsService(new GlobalOperationalSettings
     {
-        ElectionSlot = Math.Clamp(dbOptions.DefaultElectionSlot, 1, 3),
+        ElectionSlot = defaultElectionSlot,
         ConnectionType = 0,
         Target = GraphicsTarget.Ipf,
         Oficiales = false,
         Avance = 0,
         ExportName = "BrainStorm",
         IncludeZeroSeats = false,
-        AutoRefreshEnabled = false,
-        AutoRefreshIntervalSeconds = 5
+        AutoRefreshEnabled = true,
+        AutoRefreshIntervalSeconds = defaultPollingSeconds
     }));
 builder.Services.AddSingleton<DatabaseChangeListenerService>();
 builder.Services.AddHostedService<DatabaseChangeListenerHostedService>();
 builder.Services.AddSingleton<ISignalComposer, DefaultSignalComposer>();
-builder.Services.AddSingleton<IBrainStormCsvWriter, FileBrainStormCsvWriter>();
+builder.Services.AddSingleton<IBrainStormCsvWriter>(sp =>
+    new FileBrainStormCsvWriter(
+        sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<StorageOptions>>(),
+        sp.GetRequiredService<ILogger<FileBrainStormCsvWriter>>()));
 builder.Services.AddSingleton<IGraphicsGateway, TcpGraphicsGateway>();
 builder.Services.AddSingleton<IOperationalConfigurationService, OperationalConfigurationService>();
 builder.Services.AddSingleton<IOperationAuditService, JsonlOperationAuditService>();

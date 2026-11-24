@@ -16,7 +16,8 @@ public sealed class DatabaseChangeListenerService
     private readonly IGraphicsGateway _graphicsGateway;
     private readonly ILogger<DatabaseChangeListenerService> _logger;
     private readonly IGlobalOperationalSettingsService? _globalSettings;
-    private readonly Dictionary<GraphicModule, string> _lastHashes = new();
+    private readonly IModuleLockService? _lockService;
+    private readonly Dictionary<GraphicModule, (string ContextKey, string DataHash)> _lastHashes = new();
 
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
 
@@ -27,7 +28,8 @@ public sealed class DatabaseChangeListenerService
         ISignalComposer signalComposer,
         IGraphicsGateway graphicsGateway,
         ILogger<DatabaseChangeListenerService> logger,
-        IGlobalOperationalSettingsService? globalSettings = null)
+        IGlobalOperationalSettingsService? globalSettings = null,
+        IModuleLockService? lockService = null)
     {
         _stateService = stateService;
         _dataService = dataService;
@@ -36,6 +38,7 @@ public sealed class DatabaseChangeListenerService
         _graphicsGateway = graphicsGateway;
         _logger = logger;
         _globalSettings = globalSettings;
+        _lockService = lockService;
     }
 
     public async Task RunPollingLoopAsync(CancellationToken stoppingToken)
@@ -60,50 +63,94 @@ public sealed class DatabaseChangeListenerService
     public async Task<int> CheckAndDispatchUpdatesOnceAsync(CancellationToken cancellationToken = default)
     {
         var dispatchedCount = 0;
-        var updatedModules = new List<GraphicModule>();
+        var csvUpdatedOffAirModules = new List<GraphicModule>();
+        var signalDispatchedModules = new List<GraphicModule>();
+
         var states = _stateService.GetAllStates();
-        var onAirStates = states.Where(s => s.IsOnAir && s.ActiveQuery is not null).ToList();
+        var lockStates = _lockService?.GetStates() ?? [];
+        var isCartonOperatorActive = lockStates.Any(l => l.Module == GraphicModule.Carton && l.IsLocked);
+        var globalSnapshot = _globalSettings?.GetSettings();
         var checkedAtUtc = DateTimeOffset.UtcNow;
 
-        if (onAirStates.Count == 0)
+        var monitoredModules = states
+            .Where(s => ShouldMonitorModule(s, isCartonOperatorActive))
+            .ToList();
+
+        if (monitoredModules.Count == 0)
         {
-            _globalSettings?.RecordAutoRefreshCheck(checkedAtUtc, null, "Sin módulos en aire.");
+            _globalSettings?.RecordAutoRefreshCheck(checkedAtUtc, null, "Sin módulos en aire ni operador de cartones activo.");
             return 0;
         }
 
-        foreach (var state in onAirStates)
+        foreach (var state in monitoredModules)
         {
             try
             {
-                var snapshot = await _dataService.GetSnapshotAsync(state.ActiveQuery!, state.Oficiales, cancellationToken);
+                var query = state.IsOnAir
+                    ? (state.ActiveQuery ?? BuildFallbackQuery(state, globalSnapshot))
+                    : (state.PreviewQuery ?? state.ActiveQuery ?? BuildFallbackQuery(state, globalSnapshot));
+                var contextKey = $"{query.ElectionSlot}|{state.Oficiales}|{state.CartonKind}|{state.ActiveScene}|{query.Kind}|{query.CircunscripcionCodigo}|{query.AutonomiaCodigo}|{query.PartidoCodigo}|{query.MedioCodigo}";
+                var snapshot = await _dataService.GetSnapshotAsync(query, state.Oficiales, cancellationToken);
                 var hash = ComputeSnapshotHash(snapshot);
 
-                if (!_lastHashes.TryGetValue(state.Module, out var previousHash))
+                if (!_lastHashes.TryGetValue(state.Module, out var previous)
+                    || !string.Equals(previous.ContextKey, contextKey, StringComparison.Ordinal))
                 {
-                    _lastHashes[state.Module] = hash;
+                    _lastHashes[state.Module] = (contextKey, hash);
+
+                    // Si hay operador de Cartones activo en un contexto nuevo, garantizamos ficheros iniciales sincronizados
+                    if (state.Module == GraphicModule.Carton && isCartonOperatorActive && !state.IsOnAir)
+                    {
+                        await _csvWriter.WriteAllCartonFilesAsync(snapshot, query, cancellationToken, state.Module);
+                        await _csvWriter.WriteRecuentosJsonAsync(snapshot, cancellationToken, state.Module);
+                    }
+
                     continue;
                 }
 
-                if (string.Equals(previousHash, hash, StringComparison.Ordinal))
+                if (string.Equals(previous.DataHash, hash, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                _lastHashes[state.Module] = hash;
+                _lastHashes[state.Module] = (contextKey, hash);
 
-                var exportName = state.Oficiales ? "Oficial_Datos" : "Sondeo_Datos";
-                await _csvWriter.WriteAsync(snapshot, exportName, cancellationToken, state.Module);
+                var exportName = !string.IsNullOrWhiteSpace(state.ExportName)
+                    ? state.ExportName
+                    : (state.Oficiales ? "Oficial_Datos" : "Sondeo_Datos");
+
+                var resolvedCartonKind = state.Module == GraphicModule.Carton
+                    ? (state.CartonKind ?? CartonKindResolver.ResolveFromScene(state.ActiveScene))
+                    : (CartonKind?)null;
+
+                if (state.Module == GraphicModule.Carton)
+                {
+                    await _csvWriter.WriteAllCartonFilesAsync(snapshot, query, cancellationToken, state.Module);
+                }
+                else
+                {
+                    await _csvWriter.WriteAsync(snapshot, exportName, cancellationToken, state.Module);
+                }
+
                 await _csvWriter.WriteRecuentosJsonAsync(snapshot, cancellationToken, state.Module);
+
+                if (!state.IsOnAir)
+                {
+                    csvUpdatedOffAirModules.Add(state.Module);
+                    continue;
+                }
 
                 var updateRequest = new OperationRequest
                 {
                     OperatorId = string.IsNullOrWhiteSpace(state.LastOperatorId) ? "system-listener" : state.LastOperatorId,
                     Module = state.Module,
+                    CartonKind = resolvedCartonKind,
                     Action = OperationActionType.Update,
                     Scene = state.ActiveScene,
                     Oficiales = state.Oficiales,
+                    ExportName = exportName,
                     Target = state.Target,
-                    Query = state.ActiveQuery!
+                    Query = query
                 };
 
                 var signal = _signalComposer.Compose(updateRequest, snapshot);
@@ -111,7 +158,7 @@ public sealed class DatabaseChangeListenerService
                 {
                     await _graphicsGateway.SendAsync(state.Target, signal, cancellationToken, state.Module);
                     dispatchedCount++;
-                    updatedModules.Add(state.Module);
+                    signalDispatchedModules.Add(state.Module);
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -121,9 +168,20 @@ public sealed class DatabaseChangeListenerService
             }
         }
 
-        if (dispatchedCount > 0)
+        if (dispatchedCount > 0 || csvUpdatedOffAirModules.Count > 0)
         {
-            _globalSettings?.RecordAutoRefreshCheck(checkedAtUtc, DateTimeOffset.UtcNow, $"Autoactualizados: {string.Join(", ", updatedModules)}");
+            var statusParts = new List<string>();
+            if (signalDispatchedModules.Count > 0)
+            {
+                statusParts.Add($"Señal + CSV en aire: {string.Join(", ", signalDispatchedModules)}");
+            }
+
+            if (csvUpdatedOffAirModules.Count > 0)
+            {
+                statusParts.Add($"CSV sincronizados: {string.Join(", ", csvUpdatedOffAirModules)}");
+            }
+
+            _globalSettings?.RecordAutoRefreshCheck(checkedAtUtc, DateTimeOffset.UtcNow, string.Join(" · ", statusParts));
         }
         else
         {
@@ -133,18 +191,52 @@ public sealed class DatabaseChangeListenerService
         return dispatchedCount;
     }
 
+    private static bool ShouldMonitorModule(ModuleOperationalState state, bool isCartonOperatorActive)
+    {
+        if (state.IsOnAir && state.ActiveQuery is not null)
+        {
+            return true;
+        }
+
+        if (state.Module == GraphicModule.Carton && isCartonOperatorActive)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static SnapshotQuery BuildFallbackQuery(ModuleOperationalState state, GlobalOperationalSettings? global)
+    {
+        return new SnapshotQuery
+        {
+            ElectionSlot = state.ElectionSlot,
+            ConnectionType = global?.ConnectionType ?? 0,
+            Kind = SnapshotQueryKind.Circunscripcion,
+            CircunscripcionCodigo = "9900000",
+            Avance = global?.Avance is > 0 ? global.Avance : null,
+            IncludeZeroSeats = global?.IncludeZeroSeats ?? false,
+            MedioCodigo = "RTVE"
+        };
+    }
+
     private static string ComputeSnapshotHash(BrainStormSnapshot snapshot)
     {
+        var sourceParties = snapshot.PartidosCircunscripcionCompletos is { Count: > 0 }
+            ? snapshot.PartidosCircunscripcionCompletos
+            : snapshot.Partidos;
+
         var payload = JsonSerializer.Serialize(new
         {
             snapshot.Circunscripcion.Codigo,
             snapshot.Escrutado,
+            snapshot.EscrutadoGeneral,
             snapshot.Avance,
             snapshot.Avance1,
             snapshot.Avance2,
             snapshot.Avance3,
             snapshot.Participacion,
-            Partidos = snapshot.Partidos.Select(p => new
+            Partidos = sourceParties.Select(p => new
             {
                 p.Codigo,
                 p.Escanios,
@@ -153,7 +245,15 @@ public sealed class DatabaseChangeListenerService
                 p.PorcentajeVoto,
                 p.Votos,
                 p.EsUltimoEscano,
-                p.LuchaUltimoEscano
+                p.LuchaUltimoEscano,
+                p.RestoVotos
+            }),
+            Mayorias = snapshot.MayoriasCircunscripciones.Select(m => new
+            {
+                m.CodigoLugar,
+                m.CodigoPartidoGanador,
+                m.EscaniosCircunscripcion,
+                m.Escrutado
             })
         });
 

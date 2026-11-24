@@ -1,3 +1,4 @@
+@using System.Globalization
 @using Elecciones.Application.Models
 
 <div class="ws-action-bar" role="toolbar" aria-label="Control de emisión de escena">
@@ -6,16 +7,18 @@
         <strong>@SceneLabel</strong>
     </span>
 
-    <button class="ws-btn ws-action-btn"
-            type="button"
-            @onclick="() => OnAction.InvokeAsync(OperationActionType.Prepare)"
-            disabled="@Disabled">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
-            <circle cx="12" cy="12" r="3" />
-        </svg>
-        PREPARA
-    </button>
+    @if (Oficiales && EscrutadoGeneral.HasValue)
+    {
+        <span class="ws-chip ws-chip-accent ws-mono" title="Porcentaje de escrutinio general de la elección activa">
+            Escrutinio Gral.: <strong>@FormatPct(EscrutadoGeneral.Value)%</strong>
+        </span>
+        @if (IsSubCircunscripcion && EscrutadoCircunscripcion.HasValue)
+        {
+            <span class="ws-chip ws-mono" title="Porcentaje escrutado en la circunscripción seleccionada">
+                Circ.: <strong>@FormatPct(EscrutadoCircunscripcion.Value)%</strong>
+            </span>
+        }
+    }
 
     <button class="ws-btn ws-btn-live ws-action-btn"
             type="button"
@@ -65,8 +68,16 @@
 </div>
 
 @code {
+    private static readonly CultureInfo EsCulture = CultureInfo.GetCultureInfo("es-ES");
+
     [Parameter] public string SceneLabel { get; set; } = string.Empty;
     [Parameter] public string UpdateLabel { get; set; } = "ACTUALIZA";
+    [Parameter] public bool Oficiales { get; set; }
+    [Parameter] public double? EscrutadoGeneral { get; set; }
+    [Parameter] public double? EscrutadoCircunscripcion { get; set; }
+    [Parameter] public bool IsSubCircunscripcion { get; set; }
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public EventCallback<OperationActionType> OnAction { get; set; }
+
+    private static string FormatPct(double value) => value.ToString("0.00", EsCulture);
 }

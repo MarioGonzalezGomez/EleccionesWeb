@@ -116,7 +116,25 @@ public sealed class OperationService : IOperationService
             request.Oficiales,
             cancellationToken);
 
-        var csvPath = await _csvWriter.WriteAsync(snapshot, request.ExportName, cancellationToken, request.Module);
+        string csvPath;
+        IReadOnlyList<string> generatedCsvPaths;
+
+        if (request.Module == GraphicModule.Carton)
+        {
+            var allCartonArtifacts = await _csvWriter.WriteAllCartonFilesAsync(
+                snapshot,
+                request.Query,
+                cancellationToken,
+                request.Module);
+            csvPath = allCartonArtifacts.FirstOrDefault()?.FullPath ?? string.Empty;
+            generatedCsvPaths = allCartonArtifacts.Select(f => f.FullPath).ToList();
+        }
+        else
+        {
+            csvPath = await _csvWriter.WriteAsync(snapshot, request.ExportName, cancellationToken, request.Module);
+            generatedCsvPaths = string.IsNullOrWhiteSpace(csvPath) ? [] : [csvPath];
+        }
+
         await _csvWriter.WriteRecuentosJsonAsync(snapshot, cancellationToken, request.Module);
         await WriteSedesCsvIfNeededAsync(request, snapshot, cancellationToken);
 
@@ -129,8 +147,9 @@ public sealed class OperationService : IOperationService
         var successResult = new OperationResult
         {
             Success = true,
-            Message = BuildResultMessage(dispatchedTargets),
+            Message = BuildResultMessage(dispatchedTargets, generatedCsvPaths),
             CsvPath = csvPath,
+            GeneratedCsvPaths = generatedCsvPaths,
             Signal = signal,
             DispatchedTargets = dispatchedTargets
         };
@@ -157,14 +176,18 @@ public sealed class OperationService : IOperationService
         await _csvWriter.WriteSedesAsync(snapshot, request.CommandValue, cancellationToken, request.Module);
     }
 
-    private static string BuildResultMessage(IReadOnlyList<string> dispatchedTargets)
+    private static string BuildResultMessage(IReadOnlyList<string> dispatchedTargets, IReadOnlyList<string> generatedCsvPaths)
     {
+        var filesLabel = generatedCsvPaths.Count > 0
+            ? $" CSV: {string.Join(", ", generatedCsvPaths.Select(Path.GetFileName))}."
+            : string.Empty;
+
         if (dispatchedTargets.Count == 0)
         {
-            return "Action executed. No graphics target was enabled.";
+            return $"Acción ejecutada (sin destinos gráficos activos).{filesLabel}";
         }
 
-        return $"Action executed and sent to: {string.Join(", ", dispatchedTargets)}";
+        return $"Acción enviada a: {string.Join(", ", dispatchedTargets)}.{filesLabel}";
     }
 
     private static string ValidateQuery(SnapshotQuery? query)

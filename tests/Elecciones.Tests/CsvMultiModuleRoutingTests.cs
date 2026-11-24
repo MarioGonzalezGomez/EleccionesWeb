@@ -61,6 +61,39 @@ public sealed class CsvMultiModuleRoutingTests : IDisposable
         Assert.True(File.Exists(cartonJsonPath!));
     }
 
+    [Fact]
+    public async Task WriteAsync_ConcurrentWritesToSameTargetPath_SerializesWithoutIoException()
+    {
+        var sharedFolder = Path.Combine(_tempRoot, "ConcurrentCSV");
+        var storageOptions = Options.Create(new StorageOptions
+        {
+            CsvFolder = sharedFolder,
+            JsonFolder = sharedFolder,
+            BrainStormCsvFormat = "OLD",
+            EnableRecuentosJson = true,
+            RecuentosJsonFileName = "datos_escrutado"
+        });
+
+        var writer = new FileBrainStormCsvWriter(storageOptions, NullLogger<FileBrainStormCsvWriter>.Instance);
+        var snapshotOficial = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true);
+        var snapshotSondeo = TestSnapshotFactory.CreateSampleSnapshot(oficiales: false);
+
+        var tasks = Enumerable.Range(0, 24).Select(async i =>
+        {
+            var snap = i % 2 == 0 ? snapshotOficial : snapshotSondeo;
+            var mod = i % 2 == 0 ? GraphicModule.Faldon : GraphicModule.Carton;
+            await writer.WriteAsync(snap, "BrainStorm", CancellationToken.None, mod);
+            await writer.WriteRecuentosJsonAsync(snap, CancellationToken.None, mod);
+            await writer.WriteSedesAsync(snap, "00001", CancellationToken.None, mod);
+        });
+
+        await Task.WhenAll(tasks);
+
+        Assert.True(File.Exists(Path.Combine(sharedFolder, "BrainStorm.csv")));
+        Assert.True(File.Exists(Path.Combine(sharedFolder, "datos_escrutado.json")));
+        Assert.True(File.Exists(Path.Combine(sharedFolder, "Sedes.csv")));
+    }
+
     public void Dispose()
     {
         try

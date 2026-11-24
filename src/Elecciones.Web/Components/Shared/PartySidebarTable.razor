@@ -1,44 +1,88 @@
+@using System.Globalization
 @using Elecciones.Application.Models
 
-<aside class="ws-party-sidebar" aria-label="Listado de partidos y escaños">
+<section class="ws-party-panel" aria-label="Tabla detallada de partidos, escaños y votos">
     <div class="ws-party-header">
-        <span>Partidos <span class="ws-num">(@FilteredParties.Count/@Parties.Count)</span></span>
-        <button class="ws-icon-btn"
-                type="button"
-                title="Refrescar partidos"
-                aria-label="Refrescar partidos"
-                @onclick="OnRefreshClicked"
-                disabled="@Loading">
-            <svg class="@(Loading ? "ws-spin" : null)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8" />
-                <path d="M21 3v5h-5" />
-            </svg>
-        </button>
-    </div>
+        <div class="ws-party-header-meta">
+            <span class="ws-party-title">
+                Partidos <span class="ws-num text-muted">(@FilteredParties.Count/@Parties.Count)</span>
+            </span>
 
-    <div class="ws-party-filter">
-        <input type="search"
-               class="form-control form-control-sm"
-               placeholder="Filtrar siglas o código..."
-               aria-label="Filtrar partidos"
-               @bind="searchTerm"
-               @bind:event="oninput" />
+            @if (Snapshot is not null && Parties.Count > 0)
+            {
+                <div class="ws-party-kpis">
+                    @if (Oficiales)
+                    {
+                        <span class="ws-chip ws-chip-accent">
+                            Escrutado: <strong>@FormatPercentage(Snapshot.Escrutado)%</strong>
+                        </span>
+                        <span class="ws-chip">
+                            Participación: <strong>@FormatPercentage(Snapshot.Participacion)%</strong>
+                        </span>
+                        @if (Snapshot.VotantesTotales > 0)
+                        {
+                            <span class="ws-chip">
+                                Votantes: <strong>@FormatInteger(Snapshot.VotantesTotales)</strong>
+                            </span>
+                        }
+                    }
+                    else
+                    {
+                        <span class="ws-chip ws-chip-amber">
+                            Sondeo: <strong>@(string.IsNullOrWhiteSpace(Snapshot.NombreSondeo) ? "RTVE" : Snapshot.NombreSondeo)</strong>
+                        </span>
+                    }
+
+                    @if (Snapshot.EscaniosTotales > 0)
+                    {
+                        <span class="ws-chip">
+                            Cámara: <strong>@Snapshot.EscaniosTotales esc.</strong> · Mayoría: <strong>@Snapshot.MayoriaAbsoluta</strong>
+                        </span>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="ws-party-header-actions">
+            <input type="search"
+                   class="form-control form-control-sm ws-party-search"
+                   placeholder="Filtrar siglas, nombre o código..."
+                   aria-label="Filtrar partidos"
+                   @bind="searchTerm"
+                   @bind:event="oninput" />
+
+            <button class="ws-icon-btn"
+                    type="button"
+                    title="Refrescar datos de partidos"
+                    aria-label="Refrescar datos de partidos"
+                    @onclick="OnRefreshClicked"
+                    disabled="@Loading">
+                <svg class="@(Loading ? "ws-spin" : null)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8" />
+                    <path d="M21 3v5h-5" />
+                </svg>
+            </button>
+        </div>
     </div>
 
     <div class="ws-party-scroll">
-        <table class="ws-table">
+        <table class="ws-table ws-party-table">
             <thead>
                 <tr>
-                    <th>Siglas</th>
-                    <th class="text-end">Escaños</th>
+                    <th class="ws-col-code">Código</th>
+                    <th>Partido</th>
+                    <th class="text-end ws-col-seats">@(Oficiales ? "Escaños" : "Escaños (Sondeo)")</th>
+                    <th class="text-end ws-col-diff">@(Oficiales ? "Dif. Histórico" : "Esc. Histórico")</th>
+                    <th class="text-end ws-col-pct">% Voto</th>
+                    <th class="text-end ws-col-votes">Votos</th>
                 </tr>
             </thead>
             <tbody>
                 @if (FilteredParties.Count == 0)
                 {
                     <tr>
-                        <td colspan="2" class="text-center text-muted py-4">
-                            @(Parties.Count == 0 ? "Sin datos disponibles" : "Sin coincidencias")
+                        <td colspan="6" class="text-center text-muted py-4">
+                            @(Parties.Count == 0 ? "Sin datos de partidos disponibles para la selección actual." : "Sin coincidencias para el filtro aplicado.")
                         </td>
                     </tr>
                 }
@@ -48,30 +92,82 @@
                     {
                         var isSelected = string.Equals(SelectedPartyCode, party.Codigo, StringComparison.OrdinalIgnoreCase);
                         var escanos = Oficiales ? party.Escanios : party.EscaniosHastaSondeo;
+                        var diffHistorico = party.Escanios - party.EscaniosHistoricos;
+                        var pctBarWidth = Math.Clamp(party.PorcentajeVoto * 2.0, 0, 100).ToString("0.##", CultureInfo.InvariantCulture);
+
                         <tr class="ws-party-row @(isSelected ? "selected" : null)"
                             @onclick="() => OnPartySelected.InvokeAsync(party)"
                             @ondblclick="() => OnPartyDoubleClicked.InvokeAsync(party)">
+                            <td class="ws-mono text-muted ws-col-code">@party.Codigo</td>
                             <td>
-                                <div class="d-flex align-items-center gap-1 flex-wrap">
-                                    <span>@party.Siglas</span>
+                                <div class="d-flex align-items-center gap-2 flex-wrap">
+                                    <span class="ws-party-siglas">@party.Siglas</span>
+                                    @if (!string.IsNullOrWhiteSpace(party.Nombre) && !string.Equals(party.Nombre.Trim(), party.Siglas.Trim(), StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <span class="ws-party-name">@party.Nombre</span>
+                                    }
                                     @if (ShowUltimoIndicators && party.EsUltimoEscano != 0)
                                     {
-                                        <span class="ws-chip ws-chip-amber py-0 px-1" title="Último escaño adjudicado">ÚLT</span>
+                                        <span class="ws-chip ws-chip-amber py-0 px-1" title="Último escaño adjudicado">ÚLTIMO ESCAÑO</span>
                                     }
                                     else if (ShowUltimoIndicators && party.LuchaUltimoEscano != 0)
                                     {
-                                        <span class="ws-chip ws-chip-accent py-0 px-1" title="En disputa por el último escaño">DISPUTA</span>
+                                        <span class="ws-chip ws-chip-accent py-0 px-1" title="En disputa por el último escaño">
+                                            EN DISPUTA@(party.RestoVotos > 0 ? $" (a {FormatInteger(party.RestoVotos)} v.)" : string.Empty)
+                                        </span>
                                     }
                                 </div>
                             </td>
-                            <td class="text-end ws-mono">
+                            <td class="text-end ws-mono ws-party-seats">
                                 @if (!Oficiales && party.EscaniosDesdeSondeo != party.EscaniosHastaSondeo && party.EscaniosDesdeSondeo > 0)
                                 {
-                                    <span class="text-muted">@party.EscaniosDesdeSondeo–</span>@party.EscaniosHastaSondeo
+                                    <span class="text-muted">@party.EscaniosDesdeSondeo–</span><span>@party.EscaniosHastaSondeo</span>
                                 }
                                 else
                                 {
-                                    @escanos
+                                    <span>@escanos</span>
+                                }
+                            </td>
+                            <td class="text-end ws-mono">
+                                @if (Oficiales)
+                                {
+                                    <div class="d-inline-flex align-items-center justify-content-end gap-2">
+                                        @if (diffHistorico > 0)
+                                        {
+                                            <span class="ws-delta ws-delta-pos" title="Escaños anteriores: @party.EscaniosHistoricos">+@diffHistorico</span>
+                                        }
+                                        else if (diffHistorico < 0)
+                                        {
+                                            <span class="ws-delta ws-delta-neg" title="Escaños anteriores: @party.EscaniosHistoricos">@diffHistorico</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="ws-delta ws-delta-eq" title="Sin variación respecto a @party.EscaniosHistoricos">=</span>
+                                        }
+                                        <span class="ws-hist-ref" title="Escaños históricos">(@party.EscaniosHistoricos)</span>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <span class="text-muted" title="Escaños en elecciones anteriores">@party.EscaniosHistoricos</span>
+                                }
+                            </td>
+                            <td class="text-end ws-mono">
+                                <div class="ws-vote-pct-cell">
+                                    <div class="ws-vote-bar-track" aria-hidden="true">
+                                        <div class="ws-vote-bar-fill @(Oficiales ? string.Empty : "ws-vote-bar-amber")" style="width: @(pctBarWidth)%;"></div>
+                                    </div>
+                                    <span class="ws-vote-pct-val">@FormatPercentage(party.PorcentajeVoto)%</span>
+                                </div>
+                            </td>
+                            <td class="text-end ws-mono">
+                                @if (!Oficiales && party.Votos <= 0)
+                                {
+                                    <span class="text-muted">—</span>
+                                }
+                                else
+                                {
+                                    <span>@FormatInteger(party.Votos)</span>
                                 }
                             </td>
                         </tr>
@@ -80,12 +176,14 @@
             </tbody>
         </table>
     </div>
-</aside>
+</section>
 
 @code {
+    private static readonly CultureInfo EsCulture = CultureInfo.GetCultureInfo("es-ES");
     private string searchTerm = string.Empty;
 
     [Parameter] public IReadOnlyList<PartidoSnapshot> Parties { get; set; } = [];
+    [Parameter] public BrainStormSnapshot? Snapshot { get; set; }
     [Parameter] public string SelectedPartyCode { get; set; } = string.Empty;
     [Parameter] public bool Oficiales { get; set; }
     [Parameter] public bool ShowUltimoIndicators { get; set; }
@@ -98,6 +196,10 @@
         ? Parties
         : Parties
             .Where(p => p.Siglas.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase)
+                     || p.Nombre.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase)
                      || p.Codigo.Contains(searchTerm.Trim(), StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+    private static string FormatPercentage(double value) => value.ToString("0.00", EsCulture);
+    private static string FormatInteger(int value) => value.ToString("#,##0", EsCulture);
 }

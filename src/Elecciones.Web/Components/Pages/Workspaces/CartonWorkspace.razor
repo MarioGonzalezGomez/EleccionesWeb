@@ -3,9 +3,12 @@
 @attribute [Authorize]
 @implements IDisposable
 @using Elecciones.Application.Abstractions
+@using System.Globalization
 @using Elecciones.Application.Models
 @using Elecciones.Application.Services
+@using Elecciones.Infrastructure.Options
 @using EleccionesWeb.Services
+@using Microsoft.Extensions.Options
 @inject IModuleLockService ModuleLockService
 @inject IOperationService OperationService
 @inject IEleccionesDataService DataService
@@ -13,6 +16,8 @@
 @inject ConfiguredOperatorAuthorizationService AuthConfig
 @inject IGlobalOperationalSettingsService GlobalSettingsService
 @inject IOperationStateService StateService
+@inject IBrainStormCsvWriter CsvWriter
+@inject IOptionsMonitor<StorageOptions> StorageMonitor
 @inject AuthenticationStateProvider AuthenticationStateProvider
 
 <PageTitle>Cartón</PageTitle>
@@ -20,16 +25,23 @@
 <header class="ws-topbar">
     <div class="ws-topbar-cluster">
         <span class="ws-brand-mark">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                <line x1="8" y1="21" x2="16" y2="21" />
+                <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
             Cartón
         </span>
         <span class="ws-onair-pill @(moduleState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
             <span class="ws-tally-dot"></span>
             @(moduleState.IsOnAir ? $"EN AIRE: {(string.IsNullOrWhiteSpace(moduleState.ActiveScene) ? ActiveSceneName : moduleState.ActiveScene)}" : "FUERA DE AIRE")
         </span>
-        <span class="ws-chip @(globalSettings.Oficiales ? "ws-chip-accent" : "ws-chip-amber")">
-            @(globalSettings.Oficiales ? "OFICIALES" : "SONDEO") · Elección @globalSettings.ElectionSlot
-        </span>
+        @if (moduleOficiales && EffectiveEscrutadoGeneral.HasValue)
+        {
+            <span class="ws-chip ws-chip-accent ws-mono">
+                Escrutinio Gral.: <strong>@EffectiveEscrutadoGeneral.Value.ToString("0.00", EsCulture)%</strong>
+            </span>
+        }
         @if (!IsOwner)
         {
             <button class="ws-btn ws-btn-amber ws-btn-xs" type="button" @onclick="ClaimModuleLock">
@@ -39,9 +51,37 @@
     </div>
 
     <div class="ws-topbar-cluster">
+        <div class="ws-seg-group ws-seg-compact" role="group" aria-label="Modo de datos de Cartón">
+            <button type="button"
+                    class="ws-seg-btn @(moduleOficiales ? "active" : string.Empty)"
+                    @onclick="() => SetModuleOficialesAsync(true)">
+                Oficiales
+            </button>
+            <button type="button"
+                    class="ws-seg-btn @(!moduleOficiales ? "active-amber" : string.Empty)"
+                    @onclick="() => SetModuleOficialesAsync(false)">
+                Sondeo
+            </button>
+        </div>
+
         <div class="ws-inline-field">
-            <label>Circunscripción:</label>
-            <select class="form-select form-select-sm ws-select-circ" value="@selectedCircunscripcionCodigo" @onchange="OnCircunscripcionChangedAsync">
+            <label for="carton-slot-select">Elección:</label>
+            <select id="carton-slot-select"
+                    class="form-select form-select-sm ws-select-slot"
+                    value="@moduleElectionSlot"
+                    @onchange="OnModuleElectionSlotChangedAsync">
+                <option value="1">Elección 1</option>
+                <option value="2">Elección 2</option>
+                <option value="3">Elección 3</option>
+            </select>
+        </div>
+
+        <div class="ws-inline-field">
+            <label for="carton-circ-select">Circunscripción:</label>
+            <select id="carton-circ-select"
+                    class="form-select form-select-sm ws-select-circ"
+                    value="@selectedCircunscripcionCodigo"
+                    @onchange="OnCircunscripcionChangedAsync">
                 @foreach (var circ in circunscripciones)
                 {
                     <option value="@circ.Codigo">@circ.Codigo - @circ.Nombre</option>
@@ -49,11 +89,14 @@
             </select>
         </div>
 
-        @if (!globalSettings.Oficiales)
+        @if (!moduleOficiales)
         {
             <div class="ws-inline-field">
-                <label>Sondeo:</label>
-                <select class="form-select form-select-sm ws-select-medio" value="@selectedMedioCodigo" @onchange="OnMedioChangedAsync">
+                <label for="carton-medio-select">Sondeo:</label>
+                <select id="carton-medio-select"
+                        class="form-select form-select-sm ws-select-medio"
+                        value="@selectedMedioCodigo"
+                        @onchange="OnMedioChangedAsync">
                     @foreach (var medio in medios)
                     {
                         <option value="@medio.Codigo">@medio.Descripcion</option>
@@ -67,7 +110,7 @@
 </header>
 
 <div class="ws-body">
-    <section class="ws-panel @(moduleState.IsOnAir ? "ws-panel-live" : "")">
+    <section class="ws-panel @(moduleState.IsOnAir ? "ws-panel-live" : string.Empty)">
 
         @if (!string.IsNullOrWhiteSpace(feedbackMessage))
         {
@@ -89,37 +132,89 @@
             </div>
         }
 
-        <div class="ws-tabs">
-            @foreach (var mode in Enum.GetValues<CartonMode>())
-            {
-                <button type="button"
-                        class="ws-tab-btn @(activeMode == mode ? "active" : null)"
-                        @onclick="() => SelectMode(mode)">
-                    @GetModeLabel(mode)
-                </button>
-            }
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+            <div class="ws-tabs mb-0">
+                @foreach (var kind in Enum.GetValues<CartonKind>())
+                {
+                    <button type="button"
+                            class="ws-tab-btn @(activeKind == kind ? "active" : null)"
+                            @onclick="() => SelectKindAsync(kind)">
+                        @GetCartonLabel(kind)
+                    </button>
+                }
+            </div>
+
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                @foreach (var csvInfo in ActiveCsvTargets)
+                {
+                    <span class="ws-chip ws-mono" title="Archivo CSV específico generado por este cartón">
+                        <span class="text-muted">@csvInfo.Role:</span>
+                        <strong>@csvInfo.FileName</strong>
+                    </span>
+                }
+            </div>
         </div>
 
         <SceneActionBar SceneLabel="@ActiveSceneName"
-                        UpdateLabel="@(activeMode == CartonMode.Participacion ? "ENCADENA" : "ACTUALIZA")"
+                        UpdateLabel="@(activeKind == CartonKind.Participacion ? "ENCADENA" : "ACTUALIZA")"
+                        Oficiales="@moduleOficiales"
+                        EscrutadoGeneral="@EffectiveEscrutadoGeneral"
+                        EscrutadoCircunscripcion="@currentSnapshot?.Escrutado"
+                        IsSubCircunscripcion="@IsSubCircunscripcion"
                         Disabled="@(!CanExecute)"
                         OnAction="RunSceneActionAsync" />
 
-        @switch (activeMode)
+        @switch (activeKind)
         {
-            case CartonMode.Participacion:
-                <div class="ws-subcard small text-muted">
-                    Emisión de cartones de participación (@(globalSettings.Avance == 0 ? "Avance automático" : $"Avance {globalSettings.Avance}")).
+            case CartonKind.Participacion:
+                <div class="ws-subcard d-flex flex-wrap align-items-center justify-content-between gap-2">
+                    <div class="small text-muted">
+                        Cartón de <strong>Participación</strong> · Elección @moduleElectionSlot · @(globalSettings.Avance == 0 ? "Avance automático (según escrutinio)" : $"Avance {globalSettings.Avance}").
+                    </div>
+                    <span class="ws-chip ws-chip-accent">1 CSV específico (Participación)</span>
                 </div>
                 break;
 
-            case CartonMode.CartonPartidos:
+            case CartonKind.Mayorias:
+                <div class="ws-subcard d-flex flex-wrap align-items-center justify-content-between gap-3">
+                    <div>
+                        <div class="ws-control-group-title mb-1">Cartón de Mayorías (Doble CSV: Partidos + Provincia)</div>
+                        <div class="small text-muted">
+                            Circunscripción activa: <strong>@(currentSnapshot?.Circunscripcion.Nombre ?? selectedCircunscripcionCodigo)</strong>
+                            @if (currentSnapshot is { EscaniosTotales: > 0 })
+                            {
+                                <span> · Cámara: <strong>@currentSnapshot.EscaniosTotales esc.</strong> (Mayoría: <strong>@currentSnapshot.MayoriaAbsoluta</strong>)</span>
+                            }
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <button class="ws-btn ws-btn-primary-outline"
+                                type="button"
+                                @onclick="() => RunCommandAsync(GraphicCommand.MayoriasSube, SelectedParty?.Codigo ?? string.Empty)"
+                                disabled="@(!CanExecute)">
+                            Mayorías Sube
+                        </button>
+                        <button class="ws-btn ws-btn-amber-outline"
+                                type="button"
+                                @onclick="() => RunCommandAsync(GraphicCommand.MayoriasBaja, SelectedParty?.Codigo ?? string.Empty)"
+                                disabled="@(!CanExecute)">
+                            Mayorías Baja
+                        </button>
+                    </div>
+                </div>
+                break;
+
+            case CartonKind.Estatal:
                 <div class="ws-subcard">
+                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                        <div class="ws-control-group-title mb-0">Cartón Estatal (Doble CSV: Partidos + Provincia)</div>
+                        <span class="ws-chip ws-chip-accent">2 CSV (Partidos + Provincia)</span>
+                    </div>
                     <div class="row g-3 align-items-end">
                         <div class="col-12 col-md-5">
-                            <label class="form-label form-label-sm fw-semibold">Modo de consulta</label>
-                            <select class="form-select form-select-sm" @bind="queryKind" @bind:after="LoadPartiesAsync">
-                                <option value="@SnapshotQueryKind.Circunscripcion">Circunscripción</option>
+                            <label for="carton-query-kind" class="form-label form-label-sm fw-semibold">Modo de consulta</label>
+                            <select id="carton-query-kind" class="form-select form-select-sm" @bind="queryKind" @bind:after="LoadPartiesAsync">
+                                <option value="@SnapshotQueryKind.Circunscripcion">Circunscripción / Total Estatal</option>
                                 <option value="@SnapshotQueryKind.MasVotadosAutonomias">Más votados por Autonomías</option>
                                 <option value="@SnapshotQueryKind.MasVotadosProvincias">Más votados por Provincias (CCAA)</option>
                                 <option value="@SnapshotQueryKind.PartidoAutonomias">Partido por Autonomías</option>
@@ -130,15 +225,15 @@
                         @if (RequiresAutonomia)
                         {
                             <div class="col-12 col-md-3">
-                                <label class="form-label form-label-sm fw-semibold">Código Autonomía</label>
-                                <input class="form-control form-control-sm" @bind="autonomiaCodigo" placeholder="Ej: 01" />
+                                <label for="carton-autonomia-input" class="form-label form-label-sm fw-semibold">Código Autonomía</label>
+                                <input id="carton-autonomia-input" class="form-control form-control-sm" @bind="autonomiaCodigo" placeholder="Ej: 01" />
                             </div>
                         }
 
                         @if (RequiresPartido)
                         {
                             <div class="col-12 col-md-4">
-                                <div class="small text-muted">Partido filtro (tabla lateral):</div>
+                                <div class="small text-muted">Partido filtro (tabla inferior):</div>
                                 <div class="fw-semibold">
                                     @if (SelectedParty is not null)
                                     {
@@ -146,7 +241,7 @@
                                     }
                                     else
                                     {
-                                        <span class="text-muted">Selecciona partido</span>
+                                        <span class="text-muted">Selecciona partido en la tabla inferior</span>
                                     }
                                 </div>
                             </div>
@@ -155,38 +250,26 @@
                 </div>
                 break;
 
-            case CartonMode.CcaaMayoriasCarrusel:
-                <div class="row g-3">
-                    <div class="col-12 col-md-4">
-                        <div class="ws-subcard h-100">
-                            <div class="ws-control-group-title">Sub-escena activa</div>
-                            <div class="ws-seg-group w-100">
-                                <button type="button" class="ws-seg-btn @(ccaaSubScene == "CCAA_CARTONES" ? "active" : "")" @onclick='() => ccaaSubScene = "CCAA_CARTONES"'>CCAA</button>
-                                <button type="button" class="ws-seg-btn @(ccaaSubScene == "MAYORIAS" ? "active" : "")" @onclick='() => ccaaSubScene = "MAYORIAS"'>Mayorías</button>
-                                <button type="button" class="ws-seg-btn @(ccaaSubScene == "CARRUSEL" ? "active" : "")" @onclick='() => ccaaSubScene = "CARRUSEL"'>Carrusel</button>
-                            </div>
+            case CartonKind.Cuadraditos:
+                <div class="ws-subcard d-flex flex-wrap align-items-center justify-content-between gap-3">
+                    <div>
+                        <div class="ws-control-group-title mb-1">Cartón de Cuadraditos</div>
+                        <div class="small text-muted">
+                            Distribución gráfica de escaños · Circunscripción: <strong>@(currentSnapshot?.Circunscripcion.Nombre ?? selectedCircunscripcionCodigo)</strong>
+                            @if (SelectedParty is not null)
+                            {
+                                <span> · Partido seleccionado: <strong>@SelectedParty.Siglas</strong></span>
+                            }
                         </div>
                     </div>
-
-                    <div class="col-12 col-md-8">
-                        <div class="ws-subcard h-100">
-                            <div class="ws-control-group-title">Navegación y Encadenado</div>
-                            <div class="d-flex flex-wrap gap-2">
-                                <button class="ws-btn ws-btn-primary-outline" @onclick="() => RunCommandAsync(GraphicCommand.CcaaSube, SelectedParty?.Codigo ?? string.Empty)" disabled="@(!CanExecute)">CCAA Sube</button>
-                                <button class="ws-btn ws-btn-amber-outline" @onclick="() => RunCommandAsync(GraphicCommand.CcaaBaja, SelectedParty?.Codigo ?? string.Empty)" disabled="@(!CanExecute)">CCAA Baja</button>
-                                <button class="ws-btn ws-btn-primary-outline" @onclick="() => RunCommandAsync(GraphicCommand.MayoriasSube, SelectedParty?.Codigo ?? string.Empty)" disabled="@(!CanExecute)">Mayorías Sube</button>
-                                <button class="ws-btn ws-btn-amber-outline" @onclick="() => RunCommandAsync(GraphicCommand.MayoriasBaja, SelectedParty?.Codigo ?? string.Empty)" disabled="@(!CanExecute)">Mayorías Baja</button>
-                                <button class="ws-btn ws-btn-live" @onclick="() => RunCommandAsync(GraphicCommand.CarruselEncadena, SelectedParty?.Codigo ?? string.Empty)" disabled="@(!CanExecute)">Carrusel Encadena</button>
-                            </div>
-                        </div>
-                    </div>
+                    <span class="ws-chip ws-chip-accent">1 CSV específico (Cuadraditos)</span>
                 </div>
                 break;
 
-            case CartonMode.UltimoEscano:
+            case CartonKind.UltimoEscano:
                 <div class="ws-subcard d-flex align-items-center justify-content-between flex-wrap gap-3">
                     <div>
-                        <div class="ws-control-group-title">Partido en disputa (selección lateral o doble clic)</div>
+                        <div class="ws-control-group-title">Partido en disputa (selección en tabla inferior o doble clic)</div>
                         <div class="fw-semibold">
                             @if (SelectedParty is not null)
                             {
@@ -194,22 +277,25 @@
                             }
                             else
                             {
-                                <span class="text-muted">Selecciona un partido en la lista derecha</span>
+                                <span class="text-muted">Selecciona un partido en la tabla inferior</span>
                             }
                         </div>
                     </div>
                     <div class="d-flex flex-wrap gap-2">
                         <button class="ws-btn ws-btn-live"
+                                type="button"
                                 @onclick="() => RunPartyCommandAsync(GraphicCommand.UltimoEntraPartidoIzquierda)"
                                 disabled="@(!CanExecute || SelectedParty is null)">
                             Último Entra Izq
                         </button>
                         <button class="ws-btn ws-btn-primary"
+                                type="button"
                                 @onclick="() => RunPartyCommandAsync(GraphicCommand.UltimoEntraPartidoDerecha)"
                                 disabled="@(!CanExecute || SelectedParty is null)">
                             Último Entra Der
                         </button>
                         <button class="ws-btn ws-btn-amber"
+                                type="button"
                                 @onclick="() => RunCommandAsync(GraphicCommand.UltimoLimpiaPartidos)"
                                 disabled="@(!CanExecute)">
                             Último Limpia
@@ -221,9 +307,10 @@
     </section>
 
     <PartySidebarTable Parties="@DisplayedParties"
+                       Snapshot="@currentSnapshot"
                        SelectedPartyCode="@selectedPartyCode"
-                       Oficiales="@globalSettings.Oficiales"
-                       ShowUltimoIndicators="@(activeMode == CartonMode.UltimoEscano)"
+                       Oficiales="@moduleOficiales"
+                       ShowUltimoIndicators="@(activeKind == CartonKind.UltimoEscano)"
                        Loading="@loadingParties"
                        OnPartySelected="OnPartySelected"
                        OnPartyDoubleClicked="OnPartyDoubleClickedAsync"
@@ -231,23 +318,18 @@
 </div>
 
 @code {
-    private enum CartonMode
-    {
-        Participacion,
-        CartonPartidos,
-        CcaaMayoriasCarrusel,
-        UltimoEscano
-    }
-
-    private CartonMode activeMode = CartonMode.Participacion;
-    private string ccaaSubScene = "CCAA_CARTONES";
+    private static readonly CultureInfo EsCulture = CultureInfo.GetCultureInfo("es-ES");
+    private CartonKind activeKind = CartonKind.Participacion;
     private string operatorId = WorkspaceResolver.DefaultCartonOperator;
     private GlobalOperationalSettings globalSettings = new();
     private ModuleOperationalState moduleState = new() { Module = GraphicModule.Carton };
+    private int moduleElectionSlot = 1;
+    private bool moduleOficiales;
 
     private IReadOnlyList<CircunscripcionSummary> circunscripciones = [];
     private IReadOnlyList<MedioSummary> medios = [new("RTVE", "RTVE")];
     private IReadOnlyList<PartidoSnapshot> availableParties = [];
+    private BrainStormSnapshot? currentSnapshot;
 
     private SnapshotQueryKind queryKind = SnapshotQueryKind.Circunscripcion;
     private string selectedCircunscripcionCodigo = string.Empty;
@@ -258,32 +340,58 @@
     private string feedbackMessage = string.Empty;
     private bool feedbackIsError;
 
-    private string ActiveSceneName => activeMode switch
-    {
-        CartonMode.Participacion => "PARTICIPACION",
-        CartonMode.CartonPartidos => "CARTON_PARTIDOS",
-        CartonMode.CcaaMayoriasCarrusel => ccaaSubScene,
-        CartonMode.UltimoEscano => "ULTIMO_ESCANO",
-        _ => "PARTICIPACION"
-    };
+    private string ActiveSceneName => CartonKindResolver.ToDefaultSceneName(activeKind);
 
-    private bool RequiresAutonomia => activeMode == CartonMode.CartonPartidos
+    private IReadOnlyList<(string Role, string FileName)> ActiveCsvTargets
+    {
+        get
+        {
+            var files = StorageMonitor.CurrentValue.CartonCsvFiles ?? new CartonCsvFilesOptions();
+            return activeKind switch
+            {
+                CartonKind.Participacion => [("CSV", files.ParticipacionFileName)],
+                CartonKind.Mayorias =>
+                [
+                    ("Partidos", files.MayoriasPartidosFileName),
+                    ("Provincia", files.MayoriasProvinciaFileName)
+                ],
+                CartonKind.Estatal =>
+                [
+                    ("Partidos", files.EstatalPartidosFileName),
+                    ("Provincia", files.EstatalProvinciaFileName)
+                ],
+                CartonKind.Cuadraditos => [("CSV", files.CuadraditosFileName)],
+                CartonKind.UltimoEscano => [("CSV", files.UltimoEscanoFileName)],
+                _ => [("CSV", files.ParticipacionFileName)]
+            };
+        }
+    }
+
+    private bool RequiresAutonomia => activeKind == CartonKind.Estatal
         && queryKind is SnapshotQueryKind.MasVotadosProvincias or SnapshotQueryKind.PartidoProvincias;
 
-    private bool RequiresPartido => activeMode == CartonMode.CartonPartidos
+    private bool RequiresPartido => activeKind == CartonKind.Estatal
         && queryKind is SnapshotQueryKind.PartidoAutonomias or SnapshotQueryKind.PartidoProvincias;
 
-    private IReadOnlyList<PartidoSnapshot> DisplayedParties => activeMode == CartonMode.UltimoEscano
+    private IReadOnlyList<PartidoSnapshot> DisplayedParties => activeKind == CartonKind.UltimoEscano
         ? availableParties
             .OrderByDescending(p => p.EsUltimoEscano)
             .ThenByDescending(p => p.LuchaUltimoEscano)
             .ThenByDescending(GetDisplayEscanos)
+            .ThenByDescending(p => p.PorcentajeVoto)
             .ThenByDescending(p => p.Votos)
             .ToList()
         : availableParties;
 
     private PartidoSnapshot? SelectedParty => availableParties.FirstOrDefault(p =>
         string.Equals(p.Codigo, selectedPartyCode, StringComparison.OrdinalIgnoreCase));
+
+    private double? EffectiveEscrutadoGeneral => currentSnapshot is null
+        ? null
+        : (currentSnapshot.EscrutadoGeneral > 0 ? currentSnapshot.EscrutadoGeneral : currentSnapshot.Escrutado);
+
+    private bool IsSubCircunscripcion => !string.IsNullOrWhiteSpace(selectedCircunscripcionCodigo)
+        && !string.Equals(selectedCircunscripcionCodigo, "9900000", StringComparison.Ordinal);
 
     private bool CanOperate => AuthorizationService.CanOperate(operatorId, GraphicModule.Carton);
     private bool IsOwner => ModuleLockService.IsOwner(GraphicModule.Carton, operatorId);
@@ -299,6 +407,12 @@
 
         globalSettings = GlobalSettingsService.GetSettings();
         moduleState = StateService.GetState(GraphicModule.Carton);
+        moduleElectionSlot = moduleState.ElectionSlot;
+        moduleOficiales = moduleState.Oficiales;
+        if (moduleState.CartonKind.HasValue)
+        {
+            activeKind = moduleState.CartonKind.Value;
+        }
 
         GlobalSettingsService.OnSettingsChanged += HandleGlobalSettingsChanged;
         StateService.OnStateChanged += HandleOperationalStateChanged;
@@ -317,7 +431,7 @@
         }
     }
 
-    private void ClaimModuleLock()
+    private async Task ClaimModuleLock()
     {
         if (!CanOperate)
         {
@@ -326,22 +440,77 @@
 
         ModuleLockService.ForceRelease(GraphicModule.Carton);
         var ok = ModuleLockService.TryAcquire(GraphicModule.Carton, operatorId);
-        feedbackMessage = ok ? "Control de Cartón activo." : "No se pudo tomar el control.";
+        feedbackMessage = ok ? "Control de Cartón activo. Ficheros CSV sincronizados." : "No se pudo tomar el control.";
         feedbackIsError = !ok;
+
+        if (ok && currentSnapshot is not null)
+        {
+            await SyncCartonSelectionAndFilesAsync(currentSnapshot);
+        }
     }
 
-    private static string GetModeLabel(CartonMode mode) => mode switch
+    private static string GetCartonLabel(CartonKind kind) => kind switch
     {
-        CartonMode.Participacion => "Participación",
-        CartonMode.CartonPartidos => "Cartón Partidos",
-        CartonMode.CcaaMayoriasCarrusel => "CCAA / Mayorías / Carrusel",
-        CartonMode.UltimoEscano => "Último Escaño",
-        _ => mode.ToString()
+        CartonKind.Participacion => "Participación",
+        CartonKind.Mayorias => "Mayorías",
+        CartonKind.Estatal => "Estatal",
+        CartonKind.Cuadraditos => "Cuadraditos",
+        CartonKind.UltimoEscano => "Último escaño",
+        _ => kind.ToString()
     };
 
-    private void SelectMode(CartonMode mode)
+    private async Task SelectKindAsync(CartonKind kind)
     {
-        activeMode = mode;
+        var previousUsesSpecialQuery = activeKind == CartonKind.Estatal && queryKind != SnapshotQueryKind.Circunscripcion;
+        activeKind = kind;
+        var currentUsesSpecialQuery = activeKind == CartonKind.Estatal && queryKind != SnapshotQueryKind.Circunscripcion;
+
+        if (previousUsesSpecialQuery != currentUsesSpecialQuery)
+        {
+            await LoadPartiesAsync();
+        }
+        else if (currentSnapshot is not null)
+        {
+            moduleState = StateService.SyncModuleSelection(
+                GraphicModule.Carton,
+                operatorId,
+                activeKind,
+                BuildQuery(),
+                moduleOficiales,
+                globalSettings.Target,
+                globalSettings.ExportName);
+        }
+    }
+
+    private async Task SetModuleOficialesAsync(bool oficiales)
+    {
+        if (moduleOficiales == oficiales)
+        {
+            return;
+        }
+
+        moduleOficiales = oficiales;
+        moduleState = StateService.ConfigureModule(GraphicModule.Carton, moduleElectionSlot, moduleOficiales);
+        await LoadPartiesAsync();
+    }
+
+    private async Task OnModuleElectionSlotChangedAsync(ChangeEventArgs args)
+    {
+        if (!int.TryParse(args.Value?.ToString(), out var parsedSlot))
+        {
+            return;
+        }
+
+        var clamped = Math.Clamp(parsedSlot, 1, 3);
+        if (clamped == moduleElectionSlot)
+        {
+            return;
+        }
+
+        moduleElectionSlot = clamped;
+        moduleState = StateService.ConfigureModule(GraphicModule.Carton, moduleElectionSlot, moduleOficiales);
+        await ReloadReferenceDataAsync();
+        await LoadPartiesAsync();
     }
 
     private void OnPartySelected(PartidoSnapshot party)
@@ -352,7 +521,7 @@
     private async Task OnPartyDoubleClickedAsync(PartidoSnapshot party)
     {
         selectedPartyCode = party.Codigo;
-        if (activeMode == CartonMode.UltimoEscano)
+        if (activeKind == CartonKind.UltimoEscano)
         {
             await RunPartyCommandAsync(GraphicCommand.UltimoEntraPartidoIzquierda);
         }
@@ -375,12 +544,12 @@
         var previousCirc = selectedCircunscripcionCodigo;
         var previousMedio = selectedMedioCodigo;
 
-        circunscripciones = await DataService.GetCircunscripcionesAsync(globalSettings.ElectionSlot, globalSettings.ConnectionType);
+        circunscripciones = await DataService.GetCircunscripcionesAsync(moduleElectionSlot, globalSettings.ConnectionType);
         selectedCircunscripcionCodigo = circunscripciones.FirstOrDefault(x => x.Codigo == previousCirc)?.Codigo
             ?? circunscripciones.FirstOrDefault()?.Codigo
             ?? string.Empty;
 
-        var loadedMedios = await DataService.GetMediosAsync(globalSettings.ElectionSlot, globalSettings.ConnectionType);
+        var loadedMedios = await DataService.GetMediosAsync(moduleElectionSlot, globalSettings.ConnectionType);
         var list = new List<MedioSummary> { new("RTVE", "RTVE") };
         list.AddRange(loadedMedios
             .Where(x => !string.IsNullOrWhiteSpace(x.Codigo) && !string.Equals(x.Codigo, "RTVE", StringComparison.OrdinalIgnoreCase))
@@ -396,10 +565,13 @@
         loadingParties = true;
         try
         {
-            var snapshot = await DataService.GetSnapshotAsync(BuildQuery(), globalSettings.Oficiales);
+            var query = BuildQuery();
+            var snapshot = await DataService.GetSnapshotAsync(query, moduleOficiales);
+            currentSnapshot = snapshot;
             availableParties = snapshot.Partidos
                 .Where(x => !string.IsNullOrWhiteSpace(x.Codigo))
                 .OrderByDescending(GetDisplayEscanos)
+                .ThenByDescending(x => x.PorcentajeVoto)
                 .ThenByDescending(x => x.Votos)
                 .ToList();
 
@@ -407,6 +579,8 @@
             {
                 selectedPartyCode = DisplayedParties.FirstOrDefault()?.Codigo ?? string.Empty;
             }
+
+            await SyncCartonSelectionAndFilesAsync(snapshot);
         }
         catch (Exception ex)
         {
@@ -426,11 +600,12 @@
         {
             OperatorId = operatorId,
             Module = GraphicModule.Carton,
+            CartonKind = activeKind,
             Scene = ActiveSceneName,
             Action = action,
             Command = GraphicCommand.None,
             Target = globalSettings.Target,
-            Oficiales = globalSettings.Oficiales,
+            Oficiales = moduleOficiales,
             ExportName = globalSettings.ExportName,
             Query = BuildQuery()
         };
@@ -447,12 +622,13 @@
         {
             OperatorId = operatorId,
             Module = GraphicModule.Carton,
+            CartonKind = activeKind,
             Scene = ActiveSceneName,
             Action = OperationActionType.Update,
             Command = command,
             CommandValue = commandValue,
             Target = globalSettings.Target,
-            Oficiales = globalSettings.Oficiales,
+            Oficiales = moduleOficiales,
             ExportName = globalSettings.ExportName,
             Query = BuildQuery()
         };
@@ -472,17 +648,38 @@
         await RunCommandAsync(command, SelectedParty.Codigo);
     }
 
-    private int GetDisplayEscanos(PartidoSnapshot p) => globalSettings.Oficiales ? p.Escanios : p.EscaniosHastaSondeo;
+    private int GetDisplayEscanos(PartidoSnapshot p) => moduleOficiales ? p.Escanios : p.EscaniosHastaSondeo;
+
+    private async Task SyncCartonSelectionAndFilesAsync(BrainStormSnapshot snapshot)
+    {
+        var query = BuildQuery();
+        moduleState = StateService.SyncModuleSelection(
+            GraphicModule.Carton,
+            operatorId,
+            activeKind,
+            query,
+            moduleOficiales,
+            globalSettings.Target,
+            globalSettings.ExportName);
+
+        // Solo escribimos directamente desde la previsualización cuando el módulo está FUERA DE AIRE;
+        // si está EN AIRE, los CSV en disco pertenecen a la emisión activa hasta pulsar ENTRA o ACTUALIZA.
+        if (IsOwner && !moduleState.IsOnAir)
+        {
+            await CsvWriter.WriteAllCartonFilesAsync(snapshot, query, CancellationToken.None, GraphicModule.Carton);
+            await CsvWriter.WriteRecuentosJsonAsync(snapshot, CancellationToken.None, GraphicModule.Carton);
+        }
+    }
 
     private SnapshotQuery BuildQuery()
     {
-        var effectiveKind = activeMode == CartonMode.CartonPartidos
+        var effectiveKind = activeKind == CartonKind.Estatal
             ? queryKind
             : SnapshotQueryKind.Circunscripcion;
 
         return new SnapshotQuery
         {
-            ElectionSlot = globalSettings.ElectionSlot,
+            ElectionSlot = moduleElectionSlot,
             ConnectionType = globalSettings.ConnectionType,
             Kind = effectiveKind,
             CircunscripcionCodigo = selectedCircunscripcionCodigo,
@@ -498,17 +695,17 @@
     {
         _ = InvokeAsync(async () =>
         {
-            var slotOrConnChanged = updated.ElectionSlot != globalSettings.ElectionSlot
-                                    || updated.ConnectionType != globalSettings.ConnectionType;
-            var modeChanged = updated.Oficiales != globalSettings.Oficiales;
+            var connChanged = updated.ConnectionType != globalSettings.ConnectionType;
+            var queryFilterChanged = updated.IncludeZeroSeats != globalSettings.IncludeZeroSeats
+                                     || updated.Avance != globalSettings.Avance;
             globalSettings = updated;
 
-            if (slotOrConnChanged)
+            if (connChanged)
             {
                 await ReloadReferenceDataAsync();
             }
 
-            if (slotOrConnChanged || modeChanged)
+            if (connChanged || queryFilterChanged)
             {
                 await LoadPartiesAsync();
             }
@@ -524,9 +721,24 @@
             return;
         }
 
-        _ = InvokeAsync(() =>
+        _ = InvokeAsync(async () =>
         {
+            var slotChanged = state.ElectionSlot != moduleElectionSlot;
+            var modeChanged = state.Oficiales != moduleOficiales;
             moduleState = state;
+            moduleElectionSlot = state.ElectionSlot;
+            moduleOficiales = state.Oficiales;
+
+            if (slotChanged)
+            {
+                await ReloadReferenceDataAsync();
+            }
+
+            if (slotChanged || modeChanged)
+            {
+                await LoadPartiesAsync();
+            }
+
             StateHasChanged();
         });
     }

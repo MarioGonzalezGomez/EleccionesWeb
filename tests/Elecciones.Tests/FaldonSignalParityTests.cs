@@ -234,4 +234,49 @@ public sealed class FaldonSignalParityTests
 
         Assert.Contains("itemset('<{BD}>Sede01/Sale','EVENT_RUN');", sale);
     }
+
+    [Fact]
+    public void PrimerosResultados_ToggleState_IsScopedPerModule()
+    {
+        var composer = new DefaultSignalComposer();
+        var snapshot = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true);
+
+        // Desactivar Primeros en Cartón NO debe desactivar Primeros en Faldón
+        composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            Command = GraphicCommand.PrimerosResultadosDesactiva,
+            Oficiales = true
+        }, snapshot);
+
+        var faldonEnterStillOn = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_faldon",
+            Module = GraphicModule.Faldon,
+            Scene = "TICKER",
+            Action = OperationActionType.Enter,
+            Oficiales = true
+        }, snapshot);
+        Assert.Contains("PrimerosResultados/Entra", faldonEnterStillOn);
+
+        // Desactivar Primeros en Faldón sí suprime PrimerosResultados/Entra en Faldón
+        composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_faldon",
+            Module = GraphicModule.Faldon,
+            Command = GraphicCommand.PrimerosResultadosDesactiva,
+            Oficiales = true
+        }, snapshot);
+
+        var faldonEnterOff = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_faldon",
+            Module = GraphicModule.Faldon,
+            Scene = "TICKER",
+            Action = OperationActionType.Enter,
+            Oficiales = true
+        }, snapshot);
+        Assert.DoesNotContain("PrimerosResultados/Entra", faldonEnterOff);
+    }
 }
