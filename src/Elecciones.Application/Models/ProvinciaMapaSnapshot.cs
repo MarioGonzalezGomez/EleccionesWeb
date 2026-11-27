@@ -21,7 +21,8 @@ public sealed record CircunscripcionMayoriaSnapshot(
     int EscaniosCircunscripcion,
     int EscaniosGanador,
     double Escrutado,
-    double Participacion
+    double Participacion,
+    int DiferenciaEscaniosGanador = 0
 );
 
 public sealed record VideoSlotSnapshot(

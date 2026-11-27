@@ -1,29 +1,41 @@
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Elecciones.Application.Models;
 using Elecciones.GraphicsGateway.Options;
+using Elecciones.Infrastructure.Data;
 using Elecciones.Infrastructure.Options;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace EleccionesWeb.Services;
 
 public sealed class OperationalConfigurationService : IOperationalConfigurationService
 {
+    private static readonly SemaphoreSlim SaveGate = new(1, 1);
     private readonly IOptionsMonitor<GraphicsEndpointsOptions> _graphicsMonitor;
     private readonly IOptionsMonitor<OperationalOptions> _operationalMonitor;
     private readonly IOptionsMonitor<StorageOptions> _storageMonitor;
+    private readonly IOptionsMonitor<DatabaseOptions> _databaseMonitor;
     private readonly IWebHostEnvironment _environment;
+    private readonly IConfiguration? _configuration;
+
+    public event Action? ConfigurationChanged;
 
     public OperationalConfigurationService(
         IOptionsMonitor<GraphicsEndpointsOptions> graphicsMonitor,
         IOptionsMonitor<OperationalOptions> operationalMonitor,
         IOptionsMonitor<StorageOptions> storageMonitor,
-        IWebHostEnvironment environment)
+        IOptionsMonitor<DatabaseOptions> databaseMonitor,
+        IWebHostEnvironment environment,
+        IConfiguration? configuration = null)
     {
         _graphicsMonitor = graphicsMonitor;
         _operationalMonitor = operationalMonitor;
         _storageMonitor = storageMonitor;
+        _databaseMonitor = databaseMonitor;
         _environment = environment;
+        _configuration = configuration;
     }
 
     public OperationalConfigurationSnapshot GetSnapshot()
@@ -32,19 +44,84 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
         {
             GraphicsEndpoints = Clone(_graphicsMonitor.CurrentValue),
             Operational = NormalizeOperational(Clone(_operationalMonitor.CurrentValue)),
-            Storage = CloneStorage(_storageMonitor.CurrentValue)
+            Storage = CloneStorage(_storageMonitor.CurrentValue),
+            Database = CloneDatabase(_databaseMonitor.CurrentValue)
         };
     }
 
     public async Task<IReadOnlyList<EndpointConnectivityStatus>> CheckConnectivityAsync(CancellationToken cancellationToken = default)
     {
         var endpoints = _graphicsMonitor.CurrentValue;
-        return
-        [
-            await CheckEndpointAsync("IPF", endpoints.Ipf, cancellationToken),
-            await CheckEndpointAsync("PRIME", endpoints.Prime, cancellationToken),
-            await CheckEndpointAsync("IPF2", endpoints.Ipf2, cancellationToken)
-        ];
+        var faldonIpf = endpoints.ResolveIpfForModule(GraphicModule.Faldon);
+        var cartonIpf = endpoints.ResolveIpfForModule(GraphicModule.Carton);
+
+        return await Task.WhenAll(
+            CheckEndpointAsync("Brainstorm Faldón", faldonIpf, cancellationToken),
+            CheckEndpointAsync("Brainstorm Cartón", cartonIpf, cancellationToken),
+            CheckEndpointAsync("PRIME", endpoints.Prime, cancellationToken),
+            CheckEndpointAsync("IPF2 (Reserva Faldón)", endpoints.Ipf2, cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<EndpointConnectivityStatus>> CheckDatabaseConnectivityAsync(
+        DatabaseOptions? candidate = null,
+        CancellationToken cancellationToken = default)
+    {
+        var dbOpts = CloneDatabase(candidate ?? _databaseMonitor.CurrentValue);
+        var host = string.IsNullOrWhiteSpace(dbOpts.Host) ? "127.0.0.1" : dbOpts.Host.Trim();
+        var port = dbOpts.Port > 0 ? dbOpts.Port : 3306;
+        var password = !string.IsNullOrWhiteSpace(dbOpts.Password)
+            ? dbOpts.Password
+            : (Environment.GetEnvironmentVariable("ELECCIONES_DB_PASSWORD") ?? string.Empty);
+
+        var results = new List<EndpointConnectivityStatus>();
+        foreach (var elec in dbOpts.GetActiveElections())
+        {
+            var label = $"E{elec.Slot} · {elec.Label}";
+            if (string.IsNullOrWhiteSpace(elec.DatabaseName))
+            {
+                results.Add(new EndpointConnectivityStatus(
+                    label,
+                    dbOpts.Enabled,
+                    host,
+                    port,
+                    false,
+                    "Nombre de base de datos vacío"));
+                continue;
+            }
+
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(4));
+
+                var connStr = $"server={host};port={port};uid={dbOpts.User};pwd={password};database={elec.DatabaseName};Connect Timeout=3;";
+                var builder = new DbContextOptionsBuilder<EleccionesDbContext>();
+                builder.UseMySQL(connStr, mysql => mysql.CommandTimeout(3));
+
+                await using var db = new EleccionesDbContext(builder.Options);
+                var circCount = await db.Circunscripciones.AsNoTracking().CountAsync(timeoutCts.Token);
+
+                results.Add(new EndpointConnectivityStatus(
+                    $"{label} ({elec.DatabaseName})",
+                    true,
+                    host,
+                    port,
+                    true,
+                    $"Conectada · {circCount} circunscripciones"));
+            }
+            catch (Exception ex)
+            {
+                results.Add(new EndpointConnectivityStatus(
+                    $"{label} ({elec.DatabaseName})",
+                    true,
+                    host,
+                    port,
+                    false,
+                    ex.Message));
+            }
+        }
+
+        return results;
     }
 
     public async Task<SaveOperationalConfigurationResult> SaveAsync(
@@ -52,11 +129,13 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
         CancellationToken cancellationToken = default)
     {
         var targetPath = ResolveSettingsFilePath();
+        await SaveGate.WaitAsync(cancellationToken);
         try
         {
             var graphics = Clone(snapshot.GraphicsEndpoints);
             var operational = NormalizeOperational(Clone(snapshot.Operational));
             var storage = CloneStorage(snapshot.Storage);
+            var database = CloneDatabase(snapshot.Database);
 
             var json = await File.ReadAllTextAsync(targetPath, cancellationToken);
             var root = JsonNode.Parse(json)?.AsObject() ?? new JsonObject();
@@ -64,6 +143,14 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
             var graphicsSection = root["GraphicsEndpoints"]?.AsObject() ?? new JsonObject();
             graphicsSection["SendToIpf2WithIpf"] = graphics.SendToIpf2WithIpf;
             graphicsSection["Ipf"] = BuildEndpointNode(graphics.Ipf);
+
+            var ipfByModuleNode = new JsonObject();
+            foreach (var kvp in graphics.IpfByModule)
+            {
+                ipfByModuleNode[kvp.Key] = BuildOverrideEndpointNode(kvp.Value, graphics.Ipf);
+            }
+            graphicsSection["IpfByModule"] = ipfByModuleNode;
+
             graphicsSection["Prime"] = BuildEndpointNode(graphics.Prime);
             graphicsSection["Ipf2"] = BuildEndpointNode(graphics.Ipf2);
             root["GraphicsEndpoints"] = graphicsSection;
@@ -86,34 +173,65 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
             storageSection["CartonCsvFiles"] = new JsonObject
             {
                 ["Delimiter"] = string.IsNullOrEmpty(cartonFiles.Delimiter) ? ";" : cartonFiles.Delimiter,
-                ["ParticipacionFileName"] = cartonFiles.ParticipacionFileName?.Trim() ?? "Carton_Participacion.csv",
-                ["MayoriasPartidosFileName"] = cartonFiles.MayoriasPartidosFileName?.Trim() ?? "datos_partidos.csv",
-                ["MayoriasProvinciaFileName"] = cartonFiles.MayoriasProvinciaFileName?.Trim() ?? "mayorias_provincias.csv",
-                ["EstatalPartidosFileName"] = cartonFiles.EstatalPartidosFileName?.Trim() ?? "datos_partidos.csv",
-                ["EstatalProvinciaFileName"] = cartonFiles.EstatalProvinciaFileName?.Trim() ?? "Carton_Estatal_Provincia.csv",
-                ["CuadraditosFileName"] = cartonFiles.CuadraditosFileName?.Trim() ?? "datos_partidos.csv",
-                ["UltimoEscanoFileName"] = cartonFiles.UltimoEscanoFileName?.Trim() ?? "Carton_UltimoEscano.csv"
+                ["DatosPartidosFileName"] = cartonFiles.DatosPartidosFileName?.Trim() ?? "datos_partidos.csv",
+                ["MayoriasProvinciasFileName"] = cartonFiles.MayoriasProvinciasFileName?.Trim() ?? "mayorias_provincias.csv",
+                ["DatosSondeoFileName"] = cartonFiles.DatosSondeoFileName?.Trim() ?? "datos_sondeo.csv",
+                ["SondeoProvinciasFileName"] = cartonFiles.SondeoProvinciasFileName?.Trim() ?? "sondeo_provincias.csv"
             };
             root["Storage"] = storageSection;
+
+            var databaseSection = root["Database"]?.AsObject() ?? new JsonObject();
+            databaseSection["Enabled"] = database.Enabled;
+            databaseSection["Host"] = database.Host;
+            databaseSection["HostBackup"] = database.HostBackup;
+            databaseSection["HostLocal"] = database.HostLocal;
+            databaseSection["Port"] = database.Port;
+            databaseSection["User"] = database.User;
+            databaseSection["Password"] = database.Password;
+            databaseSection["CommandTimeoutSeconds"] = Math.Max(2, database.CommandTimeoutSeconds);
+            databaseSection["NumEleccionesSimultaneas"] = database.ClampedActiveCount;
+            databaseSection["DefaultElectionSlot"] = Math.Clamp(database.DefaultElectionSlot, 1, database.ClampedActiveCount);
+            databaseSection["Label1"] = database.GetElectionLabel(1);
+            databaseSection["Label2"] = database.GetElectionLabel(2);
+            databaseSection["Label3"] = database.GetElectionLabel(3);
+            databaseSection["Name"] = database.Name;
+            databaseSection["Name2"] = database.Name2;
+            databaseSection["Name3"] = database.Name3;
+            databaseSection["TipoElecciones"] = database.TipoElecciones is 1 or 2 ? database.TipoElecciones : 1;
+            databaseSection["Regional"] = database.Regional;
+            databaseSection["CodigoRegionalBD1"] = database.CodigoRegionalBD1;
+            databaseSection["CodigoRegionalBD2"] = database.CodigoRegionalBD2;
+            databaseSection["CodigoRegionalBD3"] = database.CodigoRegionalBD3;
+            root["Database"] = databaseSection;
 
             var output = root.ToJsonString(new JsonSerializerOptions
             {
                 WriteIndented = true
             });
 
-            await File.WriteAllTextAsync(targetPath, output, cancellationToken);
+            var tempPath = $"{targetPath}.{Guid.NewGuid():N}.tmp";
+            await File.WriteAllTextAsync(tempPath, output, cancellationToken);
+            File.Move(tempPath, targetPath, overwrite: true);
+
+            // Fuerza la recarga síncrona inmediata de IOptionsMonitor antes de notificar a las pantallas activas
+            (_configuration as IConfigurationRoot)?.Reload();
+            ConfigurationChanged?.Invoke();
 
             return new SaveOperationalConfigurationResult(
                 true,
-                $"Configuracion guardada en {Path.GetFileName(targetPath)}.",
+                $"Configuración guardada en {Path.GetFileName(targetPath)}.",
                 targetPath);
         }
         catch (Exception ex)
         {
             return new SaveOperationalConfigurationResult(
                 false,
-                $"Error guardando configuracion: {ex.Message}",
+                $"Error guardando configuración: {ex.Message}",
                 targetPath);
+        }
+        finally
+        {
+            SaveGate.Release();
         }
     }
 
@@ -133,6 +251,17 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
             ["Host"] = endpoint.Host,
             ["Port"] = endpoint.Port,
             ["Bd"] = endpoint.Bd
+        };
+    }
+
+    private static JsonObject BuildOverrideEndpointNode(GraphicsEndpointOverrideOptions endpoint, GraphicsEndpointOptions fallback)
+    {
+        return new JsonObject
+        {
+            ["Enabled"] = endpoint.Enabled ?? fallback.Enabled,
+            ["Host"] = string.IsNullOrWhiteSpace(endpoint.Host) ? fallback.Host : endpoint.Host.Trim(),
+            ["Port"] = endpoint.Port is > 0 ? endpoint.Port.Value : fallback.Port,
+            ["Bd"] = string.IsNullOrWhiteSpace(endpoint.Bd) ? fallback.Bd : endpoint.Bd.Trim()
         };
     }
 
@@ -212,10 +341,31 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
 
     private static GraphicsEndpointsOptions Clone(GraphicsEndpointsOptions options)
     {
+        var byModule = new Dictionary<string, GraphicsEndpointOverrideOptions>(StringComparer.OrdinalIgnoreCase);
+        if (options.IpfByModule is not null)
+        {
+            foreach (var kvp in options.IpfByModule)
+            {
+                if (kvp.Value is null)
+                {
+                    continue;
+                }
+
+                byModule[kvp.Key] = new GraphicsEndpointOverrideOptions
+                {
+                    Enabled = kvp.Value.Enabled,
+                    Host = kvp.Value.Host?.Trim() ?? string.Empty,
+                    Port = kvp.Value.Port,
+                    Bd = kvp.Value.Bd?.Trim() ?? string.Empty
+                };
+            }
+        }
+
         return new GraphicsEndpointsOptions
         {
             SendToIpf2WithIpf = options.SendToIpf2WithIpf,
             Ipf = CloneEndpoint(options.Ipf),
+            IpfByModule = byModule,
             Prime = CloneEndpoint(options.Prime),
             Ipf2 = CloneEndpoint(options.Ipf2)
         };
@@ -279,14 +429,42 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
             CartonCsvFiles = new CartonCsvFilesOptions
             {
                 Delimiter = string.IsNullOrEmpty(srcFiles.Delimiter) ? ";" : srcFiles.Delimiter,
-                ParticipacionFileName = srcFiles.ParticipacionFileName?.Trim() ?? "Carton_Participacion.csv",
-                MayoriasPartidosFileName = srcFiles.MayoriasPartidosFileName?.Trim() ?? "datos_partidos.csv",
-                MayoriasProvinciaFileName = srcFiles.MayoriasProvinciaFileName?.Trim() ?? "mayorias_provincias.csv",
-                EstatalPartidosFileName = srcFiles.EstatalPartidosFileName?.Trim() ?? "datos_partidos.csv",
-                EstatalProvinciaFileName = srcFiles.EstatalProvinciaFileName?.Trim() ?? "Carton_Estatal_Provincia.csv",
-                CuadraditosFileName = srcFiles.CuadraditosFileName?.Trim() ?? "datos_partidos.csv",
-                UltimoEscanoFileName = srcFiles.UltimoEscanoFileName?.Trim() ?? "Carton_UltimoEscano.csv"
+                DatosPartidosFileName = srcFiles.DatosPartidosFileName?.Trim() ?? "datos_partidos.csv",
+                MayoriasProvinciasFileName = srcFiles.MayoriasProvinciasFileName?.Trim() ?? "mayorias_provincias.csv",
+                DatosSondeoFileName = srcFiles.DatosSondeoFileName?.Trim() ?? "datos_sondeo.csv",
+                SondeoProvinciasFileName = srcFiles.SondeoProvinciasFileName?.Trim() ?? "sondeo_provincias.csv"
             }
+        };
+    }
+
+    private static DatabaseOptions CloneDatabase(DatabaseOptions options)
+    {
+        return new DatabaseOptions
+        {
+            Enabled = options.Enabled,
+            Host = string.IsNullOrWhiteSpace(options.Host) ? "127.0.0.1" : options.Host.Trim(),
+            HostBackup = options.HostBackup?.Trim() ?? string.Empty,
+            HostLocal = string.IsNullOrWhiteSpace(options.HostLocal) ? "127.0.0.1" : options.HostLocal.Trim(),
+            Port = options.Port > 0 ? options.Port : 3306,
+            User = options.User?.Trim() ?? string.Empty,
+            Password = options.Password ?? string.Empty,
+            CommandTimeoutSeconds = options.CommandTimeoutSeconds > 0 ? options.CommandTimeoutSeconds : 5,
+            NumEleccionesSimultaneas = Math.Clamp(options.NumEleccionesSimultaneas, 1, 3),
+            DefaultElectionSlot = Math.Clamp(options.DefaultElectionSlot, 1, 3),
+            Label1 = options.GetElectionLabel(1),
+            Label2 = options.GetElectionLabel(2),
+            Label3 = options.GetElectionLabel(3),
+            Name = options.Name?.Trim() ?? string.Empty,
+            Name2 = options.Name2?.Trim() ?? string.Empty,
+            Name3 = options.Name3?.Trim() ?? string.Empty,
+            ConnectionDefault1 = options.ConnectionDefault1 is >= 1 and <= 3 ? options.ConnectionDefault1 : 1,
+            ConnectionDefault2 = options.ConnectionDefault2 is >= 1 and <= 3 ? options.ConnectionDefault2 : 1,
+            ConnectionDefault3 = options.ConnectionDefault3 is >= 1 and <= 3 ? options.ConnectionDefault3 : 1,
+            TipoElecciones = options.TipoElecciones is 1 or 2 ? options.TipoElecciones : 1,
+            Regional = options.Regional,
+            CodigoRegionalBD1 = options.CodigoRegionalBD1?.Trim() ?? string.Empty,
+            CodigoRegionalBD2 = options.CodigoRegionalBD2?.Trim() ?? string.Empty,
+            CodigoRegionalBD3 = options.CodigoRegionalBD3?.Trim() ?? string.Empty
         };
     }
 
@@ -304,7 +482,7 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
 
         if (string.IsNullOrWhiteSpace(host) || port <= 0)
         {
-            return new EndpointConnectivityStatus(name, true, host, port, false, "Host o puerto invalido");
+            return new EndpointConnectivityStatus(name, true, host, port, false, "Host o puerto inválido");
         }
 
         try

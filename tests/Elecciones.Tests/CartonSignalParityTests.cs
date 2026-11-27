@@ -8,250 +8,450 @@ namespace Elecciones.Tests;
 public sealed class CartonSignalParityTests
 {
     [Fact]
-    public void Participacion_Enter_And_Update_AppliesUnder25RuleAndMapProvincias()
+    public void Participacion_Enter_SamePlaceUpdate_PlaceChangeSiguiente_AndExit_MatchOrdenesTxt()
     {
         var composer = new DefaultSignalComposer();
-        var snapshotUnder25 = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true) with
+        var andalucia = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true) with
         {
-            Circunscripcion = new CircunscripcionSummary("0100000", "Andalucía"),
-            Avance = 1,
-            ProvinciasAutonomia =
-            [
-                new ProvinciaMapaSnapshot("0141000", "Sevilla", "PSOE"),
-                new ProvinciaMapaSnapshot("0129000", "Málaga", "PP")
-            ],
-            HoraAvance1Historico = "14:00 (2023)",
-            Avance1Historico = 18.25,
-            HoraAvance1 = "14:00",
-            Avance1 = 22.40
+            Circunscripcion = new CircunscripcionSummary("0100000", "Andalucia"),
+            ParticipacionHistorica = 87.12,
+            Participacion = 49.0,
+            ParticipacionMedia = 3.01
         };
 
-        var enterSignal = composer.Compose(new OperationRequest
+        var enter = composer.Compose(new OperationRequest
         {
-            OperatorId = "op1",
+            OperatorId = "op_carton",
             Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Participacion,
             Scene = "PARTICIPACION",
             Action = OperationActionType.Enter,
             Oficiales = true
-        }, snapshotUnder25);
+        }, andalucia);
 
-        Assert.Contains("itemset('<{BD}>PARTICIPACION/PREPARA','EVENT_RUN');", enterSignal);
-        Assert.Contains("itemgo('<{BD}>Participacion/Mapa/Sevilla','OBJ_CULL',0,0.3,0);", enterSignal);
-        Assert.Contains("itemgo('<{BD}>Participacion/Mapa/Málaga','OBJ_CULL',0,0.3,0);", enterSignal);
-        Assert.Contains("itemset('<{BD}>Participacion/LugarTxt','TEXT_STRING','Andalucía');", enterSignal);
-        Assert.Contains("itemset('<{BD}>Participacion/Hora_Izq','TEXT_STRING','14:00 (2023)');", enterSignal);
-        Assert.Contains("itemset('<{BD}>Participacion/Hora_Dch','TEXT_STRING','14:00');", enterSignal);
-        Assert.Contains("itemgo('<{BD}>Participacion_Barra_Izq','MAP_FLOAT_PAR',18.25,0.5,0.6);", enterSignal);
-        Assert.Contains("itemgo('<{BD}>Participacion_Barra_Dch','MAP_FLOAT_PAR',22.4,0.5,0.6);", enterSignal);
-        // Regla < 25%
-        Assert.Contains("itemset('<{BD}>Participacion/Barras/Barra_Dch/Txt_Dch','OBJ_OFFSET[2]',322);", enterSignal);
-        Assert.Contains("itemset('<{BD}>Participacion/Txt_Dch','TEXT_FONT','Heavy_Naranja');", enterSignal);
-        Assert.Contains("itemset('<{BD}>PARTICIPACION/ENTRA','EVENT_RUN');", enterSignal);
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>Participacion/Historico','MAP_FLOAT_PAR',87.12);",
+                "itemset('<{BD}>Participacion/Actual','MAP_FLOAT_PAR',49);",
+                "itemset('<{BD}>Participacion/Media','MAP_FLOAT_PAR',3.01);",
+                "itemset('<{BD}>Participacion/CodigoLugar','MAP_STRING_PAR','0100000');",
+                "itemset('<{BD}>Participacion/ProvinciaNombre','MAP_STRING_PAR','Andalucia');",
+                "itemset('<{BD}>PARTICIPACION/ENTRA','EVENT_RUN');"),
+            enter);
 
-        var snapshotOver25 = snapshotUnder25 with { Avance1 = 58.10 };
-        var updateSignal = composer.Compose(new OperationRequest
+        // Actualización en la misma circunscripción -> variables + ACTUALIZAR
+        var samePlaceUpdate = composer.Compose(new OperationRequest
         {
-            OperatorId = "op1",
+            OperatorId = "op_carton",
             Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Participacion,
             Scene = "PARTICIPACION",
             Action = OperationActionType.Update,
             Oficiales = true
-        }, snapshotOver25);
+        }, andalucia with { Participacion = 51.45 });
 
-        Assert.Contains("itemset('<{BD}>PARTICIPACION/ENCADENA','EVENT_RUN');", updateSignal);
-        Assert.Contains("itemgo('<{BD}>Participacion/Mapa/Sevilla','OBJ_CULL',0,0.3,0.3);", updateSignal);
-        Assert.Contains("itemgo('<{BD}>Participacion/Barras/Barra_Dch/Txt_Dch','OBJ_OFFSET[2]',190,0.5,0);", updateSignal);
-        Assert.Contains("itemset('<{BD}>Participacion/Txt_Dch','TEXT_FONT','Heavy_Negro');", updateSignal);
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>Participacion/Historico','MAP_FLOAT_PAR',87.12);",
+                "itemset('<{BD}>Participacion/Actual','MAP_FLOAT_PAR',51.45);",
+                "itemset('<{BD}>Participacion/Media','MAP_FLOAT_PAR',3.01);",
+                "itemset('<{BD}>Participacion/CodigoLugar','MAP_STRING_PAR','0100000');",
+                "itemset('<{BD}>Participacion/ProvinciaNombre','MAP_STRING_PAR','Andalucia');",
+                "itemset('<{BD}>ACTUALIZAR','EVENT_RUN');"),
+            samePlaceUpdate);
+
+        // Cambio de circunscripción en aire -> variables + PARTICIPACION/SIGUIENTE
+        var castillaLeon = andalucia with
+        {
+            Circunscripcion = new CircunscripcionSummary("0800000", "Castilla y león"),
+            ParticipacionHistorica = 71.30,
+            Participacion = 64.20,
+            ParticipacionMedia = 63.10
+        };
+
+        var placeChange = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Participacion,
+            Scene = "PARTICIPACION",
+            Action = OperationActionType.Update,
+            Oficiales = true
+        }, castillaLeon);
+
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>Participacion/Historico','MAP_FLOAT_PAR',71.3);",
+                "itemset('<{BD}>Participacion/Actual','MAP_FLOAT_PAR',64.2);",
+                "itemset('<{BD}>Participacion/Media','MAP_FLOAT_PAR',63.1);",
+                "itemset('<{BD}>Participacion/CodigoLugar','MAP_STRING_PAR','0800000');",
+                "itemset('<{BD}>Participacion/ProvinciaNombre','MAP_STRING_PAR','Castilla y león');",
+                "itemset('<{BD}>PARTICIPACION/SIGUIENTE','EVENT_RUN');"),
+            placeChange);
+
+        var exit = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Participacion,
+            Scene = "PARTICIPACION",
+            Action = OperationActionType.Exit,
+            Oficiales = true
+        }, castillaLeon);
+
+        Assert.Equal("itemset('<{BD}>PARTICIPACION/SALE','EVENT_RUN');", exit);
+
+        // Permitido también en modo Sondeo (ej. avances de participación mientras se emiten sondeos)
+        var enterDuringSondeo = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Participacion,
+            Scene = "PARTICIPACION",
+            Action = OperationActionType.Enter,
+            Oficiales = false
+        }, andalucia);
+
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>Participacion/Historico','MAP_FLOAT_PAR',87.12);",
+                "itemset('<{BD}>Participacion/Actual','MAP_FLOAT_PAR',49);",
+                "itemset('<{BD}>Participacion/Media','MAP_FLOAT_PAR',3.01);",
+                "itemset('<{BD}>Participacion/CodigoLugar','MAP_STRING_PAR','0100000');",
+                "itemset('<{BD}>Participacion/ProvinciaNombre','MAP_STRING_PAR','Andalucia');",
+                "itemset('<{BD}>PARTICIPACION/ENTRA','EVENT_RUN');"),
+            enterDuringSondeo);
     }
 
     [Fact]
-    public void CcaaCartones_And_Mayorias_ConfigureMapAndFichasDisplacement()
+    public void Mayorias_OficialesAndSondeo_Enter_Cambio_Actualizar_Pagina_AndSale_MatchOrdenesTxt()
     {
         var composer = new DefaultSignalComposer();
-        var snapshot = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true) with
+        var cyl = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true) with
         {
-            Circunscripcion = new CircunscripcionSummary("0100000", "Andalucía"),
-            ProvinciasAutonomia =
-            [
-                new ProvinciaMapaSnapshot("0141000", "Sevilla", "PSOE"),
-                new ProvinciaMapaSnapshot("0114000", "Córdoba", "PP")
-            ]
+            Circunscripcion = new CircunscripcionSummary("0800000", "Castilla y león")
         };
 
-        var ccaaEnter = composer.Compose(new OperationRequest
+        // OFICIALES
+        var enterOficial = composer.Compose(new OperationRequest
         {
-            OperatorId = "op1",
+            OperatorId = "op_carton",
             Module = GraphicModule.Carton,
-            Scene = "CCAA_CARTONES",
-            Action = OperationActionType.Enter,
-            Oficiales = true
-        }, snapshot);
-
-        Assert.Contains("itemset('<{BD}>CCAA_CARTONES/PREPARA','EVENT_RUN');", ccaaEnter);
-        Assert.Contains("itemset('<{BD}>CCAA_Carton/LugarTxt','TEXT_STRING','Andalucía');", ccaaEnter);
-        Assert.Contains("itemgo('<{BD}>CCAA_Carton/Mapa/Sevilla','OBJ_CULL',0,0.3,0);", ccaaEnter);
-        Assert.Contains("itemset('<{BD}>CCAA_Carton/Fichas/PP','OBJ_DISPLACEMENT[2]',0);", ccaaEnter);
-        Assert.Contains("itemset('<{BD}>CCAA_Carton/Fichas/PSOE','OBJ_DISPLACEMENT[2]',-110);", ccaaEnter);
-        Assert.Contains("itemset('<{BD}>CCAA_CARTONES/ENTRA','EVENT_RUN');", ccaaEnter);
-
-        var mayoriasEnter = composer.Compose(new OperationRequest
-        {
-            OperatorId = "op1",
-            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mayorias,
             Scene = "MAYORIAS",
             Action = OperationActionType.Enter,
             Oficiales = true
-        }, snapshot);
+        }, cyl);
 
-        Assert.Contains("itemset('<{BD}>MAYORIAS/PREPARA','EVENT_RUN');", mayoriasEnter);
-        Assert.Contains("itemset('<{BD}>Mayorias/LugarTxt1','TEXT_STRING','Andalucía');", mayoriasEnter);
-        Assert.Contains("itemset('<{BD}>Mayorias/Sevilla','MAT_LIST_COLOR','PSOE');", mayoriasEnter);
-        Assert.Contains("itemset('<{BD}>Mayorias/Córdoba','MAT_LIST_COLOR','PP');", mayoriasEnter);
-        Assert.Contains("itemset('<{BD}>Mapa_Mayorias/Fichas/PP','OBJ_DISPLACEMENT[2]',0);", mayoriasEnter);
-        Assert.Contains("itemset('<{BD}>Mapa_Mayorias/Fichas/PSOE','OBJ_DISPLACEMENT[2]',-100);", mayoriasEnter);
-        Assert.Contains("itemset('<{BD}>MAYORIAS/ENTRA','EVENT_RUN');", mayoriasEnter);
-    }
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>ACTUALIZAR','EVENT_RUN');",
+                "itemset('<{BD}>Mayorias/CodigoLugar','MAP_STRING_PAR','0800000');",
+                "itemset('<{BD}>Mayorias/Lugar','MAP_STRING_PAR','Castilla y león');",
+                "itemset('<{BD}>MAYORIAS/ENTRA','EVENT_RUN');"),
+            enterOficial);
 
-    [Fact]
-    public void Carrusel_Enter_Encadena_And_Update_TransitionsCardsFrom1920To0AndMinus1920()
-    {
-        var composer = new DefaultSignalComposer();
-        var snapshot = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true);
-
-        var enter = composer.Compose(new OperationRequest
+        // Misma circunscripción -> solo ACTUALIZAR
+        var sameUpdateOficial = composer.Compose(new OperationRequest
         {
-            OperatorId = "op1",
+            OperatorId = "op_carton",
             Module = GraphicModule.Carton,
-            Scene = "CARRUSEL",
-            Action = OperationActionType.Enter,
-            Oficiales = true,
-            CommandValue = "PP"
-        }, snapshot);
-
-        Assert.Contains("itemset('<{BD}>CARRUSEL/OFICIAL','EVENT_RUN');", enter);
-        Assert.Contains("itemset('<{BD}>Carton_Carrusel/Oficiales/PSOE','OBJ_DISPLACEMENT[0]',1920);", enter);
-        Assert.Contains("itemgo('<{BD}>Carton_Carrusel/Oficiales/PP','OBJ_DISPLACEMENT[0]',0,0.5,0);", enter);
-        Assert.Contains("itemset('<{BD}>CARRUSEL/ENTRA','EVENT_RUN');", enter);
-
-        var encadena = composer.Compose(new OperationRequest
-        {
-            OperatorId = "op1",
-            Module = GraphicModule.Carton,
-            Scene = "CARRUSEL",
-            Oficiales = true,
-            Command = GraphicCommand.CarruselEncadena,
-            CommandValue = "PSOE"
-        }, snapshot);
-
-        Assert.Contains("itemgo('<{BD}>Carton_Carrusel/Oficiales/PP','OBJ_DISPLACEMENT[0]',-1920,0.5,0);", encadena);
-        Assert.Contains("itemgo('<{BD}>Carton_Carrusel/Oficiales/PSOE','OBJ_DISPLACEMENT[0]',0,0.5,0);", encadena);
-
-        var update = composer.Compose(new OperationRequest
-        {
-            OperatorId = "op1",
-            Module = GraphicModule.Carton,
-            Scene = "CARRUSEL",
+            CartonKind = CartonKind.Mayorias,
+            Scene = "MAYORIAS",
             Action = OperationActionType.Update,
             Oficiales = true
-        }, snapshot);
+        }, cyl);
 
-        Assert.Contains("itemset('<{BD}>Oficial_Codigo','MAP_LLSTRING_LOAD');", update);
+        Assert.Equal("itemset('<{BD}>ACTUALIZAR','EVENT_RUN');", sameUpdateOficial);
+
+        // Cambio de circunscripción -> ACTUALIZAR + variables + MAYORIAS/CAMBIO
+        var andalucia = cyl with { Circunscripcion = new CircunscripcionSummary("0100000", "Andalucía") };
+        var cambioOficial = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mayorias,
+            Scene = "MAYORIAS",
+            Action = OperationActionType.Update,
+            Oficiales = true
+        }, andalucia);
+
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>ACTUALIZAR','EVENT_RUN');",
+                "itemset('<{BD}>Mayorias/CodigoLugar','MAP_STRING_PAR','0100000');",
+                "itemset('<{BD}>Mayorias/Lugar','MAP_STRING_PAR','Andalucía');",
+                "itemset('<{BD}>MAYORIAS/CAMBIO','EVENT_RUN');"),
+            cambioOficial);
+
+        var paginaOficial = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mayorias,
+            Scene = "MAYORIAS",
+            Command = GraphicCommand.CartonPagina,
+            Oficiales = true
+        }, andalucia);
+
+        Assert.Equal("itemset('<{BD}>MAYORIAS/PAGINA','EVENT_RUN');", paginaOficial);
+
+        var saleOficial = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mayorias,
+            Scene = "MAYORIAS",
+            Action = OperationActionType.Exit,
+            Oficiales = true
+        }, andalucia);
+
+        Assert.Equal("itemset('<{BD}>MAYORIAS/SALE','EVENT_RUN');", saleOficial);
+
+        // SONDEO
+        var enterSondeo = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mayorias,
+            Scene = "SONDEO_MAYORIAS",
+            Action = OperationActionType.Enter,
+            Oficiales = false
+        }, cyl);
+
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>ACTUALIZAR','EVENT_RUN');",
+                "itemset('<{BD}>SondeoMayorias/CodigoLugar','MAP_STRING_PAR','0800000');",
+                "itemset('<{BD}>SondeoMayorias/Lugar','MAP_STRING_PAR','Castilla y león');",
+                "itemset('<{BD}>SONDEO_MAYORIAS/ENTRA','EVENT_RUN');"),
+            enterSondeo);
+
+        var cambioSondeo = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mayorias,
+            Scene = "SONDEO_MAYORIAS",
+            Action = OperationActionType.Update,
+            Oficiales = false
+        }, andalucia);
+
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>ACTUALIZAR','EVENT_RUN');",
+                "itemset('<{BD}>SondeoMayorias/CodigoLugar','MAP_STRING_PAR','0100000');",
+                "itemset('<{BD}>SondeoMayorias/Lugar','MAP_STRING_PAR','Andalucía');",
+                "itemset('<{BD}>SONDEO_MAYORIAS/CAMBIO','EVENT_RUN');"),
+            cambioSondeo);
+
+        var paginaSondeo = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mayorias,
+            Scene = "SONDEO_MAYORIAS",
+            Command = GraphicCommand.CartonPagina,
+            Oficiales = false
+        }, andalucia);
+
+        Assert.Equal("itemset('<{BD}>SONDEO_MAYORIAS/PAGINA','EVENT_RUN');", paginaSondeo);
+
+        var saleSondeo = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mayorias,
+            Scene = "SONDEO_MAYORIAS",
+            Action = OperationActionType.Exit,
+            Oficiales = false
+        }, andalucia);
+
+        Assert.Equal("itemset('<{BD}>SONDEO_MAYORIAS/SALE','EVENT_RUN');", saleSondeo);
     }
 
     [Fact]
-    public void CartonPartidos_Enter_PositionsTwoColumnsAndFormatsText()
+    public void Estatal_OficialesAndSondeo_Enter_Actualizar_Pagina_AndSale_MatchOrdenesTxt()
     {
         var composer = new DefaultSignalComposer();
-        var parties = Enumerable.Range(1, 9)
-            .Select(i => new PartidoSnapshot(i.ToString("D5"), i.ToString("D5"), $"P{i}", $"Partido {i}", $"Cand {i}", 20 - i, 20 - i, 20 - i, 10, 12.5, 11.0, 123456, 100000, 0, 0, 0))
-            .ToList();
+        var espana = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true, "9900000", "España");
+
+        var enterOficial = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Estatal,
+            Scene = "ESTATAL",
+            Action = OperationActionType.Enter,
+            Oficiales = true
+        }, espana);
+
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>ACTUALIZAR','EVENT_RUN');",
+                "itemset('<{BD}>Estatal/Lugar','MAP_STRING_PAR','España');",
+                "itemset('<{BD}>ESTATAL/ENTRA','EVENT_RUN');"),
+            enterOficial);
+
+        var updateOficial = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Estatal,
+            Scene = "ESTATAL",
+            Action = OperationActionType.Update,
+            Oficiales = true
+        }, espana);
+
+        Assert.Equal("itemset('<{BD}>ACTUALIZAR','EVENT_RUN');", updateOficial);
+
+        var paginaOficial = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Estatal,
+            Scene = "ESTATAL",
+            Command = GraphicCommand.CartonPagina,
+            Oficiales = true
+        }, espana);
+
+        Assert.Equal("itemset('<{BD}>ESTATAL/PAGINA','EVENT_RUN');", paginaOficial);
+
+        var saleOficial = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Estatal,
+            Scene = "ESTATAL",
+            Action = OperationActionType.Exit,
+            Oficiales = true
+        }, espana);
+
+        Assert.Equal("itemset('<{BD}>ESTATAL/SALE','EVENT_RUN');", saleOficial);
+
+        var enterSondeo = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Estatal,
+            Scene = "SONDEO_ESTATAL",
+            Action = OperationActionType.Enter,
+            Oficiales = false
+        }, espana);
+
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>ACTUALIZAR','EVENT_RUN');",
+                "itemset('<{BD}>SondeoEstatal/Lugar','MAP_STRING_PAR','España');",
+                "itemset('<{BD}>SONDEO_ESTATAL/ENTRA','EVENT_RUN');"),
+            enterSondeo);
+
+        var paginaSondeo = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Estatal,
+            Scene = "SONDEO_ESTATAL",
+            Command = GraphicCommand.CartonPagina,
+            Oficiales = false
+        }, espana);
+
+        Assert.Equal("itemset('<{BD}>SONDEO_ESTATAL/PAGINA','EVENT_RUN');", paginaSondeo);
+
+        var saleSondeo = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Estatal,
+            Scene = "SONDEO_ESTATAL",
+            Action = OperationActionType.Exit,
+            Oficiales = false
+        }, espana);
+
+        Assert.Equal("itemset('<{BD}>SONDEO_ESTATAL/SALE','EVENT_RUN');", saleSondeo);
+    }
+
+    [Fact]
+    public void UltimoEscano_Carton_SendsFiveAutomaticVariablesFromFullParties_AndBlocksSondeo()
+    {
+        var composer = new DefaultSignalComposer();
+        var fullParties = new List<PartidoSnapshot>
+        {
+            new("4", "00004", "SUMAR", "SUMAR", "", 1, 1, 1, 1, 9.4, 11.2, 22450, 24500, 0, EsUltimoEscano: 1, LuchaUltimoEscano: 0),
+            // Segundo tiene 0 escaños actuales pero lucha por el último escaño a 224 votos
+            new("2", "00002", "PSOE", "PSOE", "", 0, 0, 1, 1, 8.9, 10.1, 22226, 23100, RestoVotos: 224, EsUltimoEscano: 0, LuchaUltimoEscano: 1)
+        };
+
         var snapshot = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true) with
         {
-            Partidos = parties,
-            CsvTemplatePartidos = parties
+            Circunscripcion = new CircunscripcionSummary("0700000", "Castilla y la mancha"),
+            VotantesFaltan = 158,
+            Partidos = fullParties.Where(p => p.Escanios > 0).ToList(),
+            PartidosCircunscripcionCompletos = fullParties
         };
 
         var enter = composer.Compose(new OperationRequest
         {
-            OperatorId = "op1",
+            OperatorId = "op_carton",
             Module = GraphicModule.Carton,
-            Scene = "CARTON_PARTIDOS",
+            CartonKind = CartonKind.UltimoEscano,
+            Scene = "ULTIMOESCANO",
             Action = OperationActionType.Enter,
             Oficiales = true
         }, snapshot);
 
-        // Columna 1 (i=0 => x=0, y=0.0, z=0)
-        Assert.Contains("itemset('<{BD}>Carton_Partidos/Fichas/P1','OBJ_DISPLACEMENT',(0,0.0,0));", enter);
-        // Columna 2 (i=7 => x=918, y=-1.4, z=100)
-        Assert.Contains("itemset('<{BD}>Carton_Partidos/Fichas/P8','OBJ_DISPLACEMENT',(918,-1.4,100));", enter);
-        Assert.Contains("itemset('<{BD}>Mayorias1/P1/Partido_Escanos1','TEXT_STRING','19');", enter);
-        Assert.Contains("itemset('<{BD}>Mayorias1/P1/Partido_Porcentaje1','TEXT_STRING','12.5\\\\f<Light>%');", enter);
-        Assert.Contains("itemset('<{BD}>Mayorias1/P1/Partido_Votos1','TEXT_STRING','123.456\\\\f<Light> votos');", enter);
-        Assert.Contains("itemset('<{BD}>Oficial_Codigo','MAP_LLSTRING_LOAD');", enter);
-        Assert.Contains("itemset('<{BD}>UltimoEscanoNDatos/CSV','MAP_LLSTRING_LOAD');", enter);
-        Assert.Contains("itemset('<{BD}>CARTON_PARTIDOS/ENTRA','EVENT_RUN');", enter);
-    }
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>UltimoEscano/Ganador','MAP_STRING_PAR','00004');",
+                "itemset('<{BD}>UltimoEscano/Segundo','MAP_STRING_PAR','00002');",
+                "itemset('<{BD}>UltimoEscano/Lugar','MAP_STRING_PAR','Castilla y la mancha');",
+                "itemset('<{BD}>UltimoEscano/NewPendientes','MAP_INT_PAR',158);",
+                "itemset('<{BD}>UltimoEscano/NewVotos','MAP_INT_PAR',224);",
+                "itemset('<{BD}>ULTIMOESCANO/ENTRA','EVENT_RUN');"),
+            enter);
 
-    [Fact]
-    public void UltimoEscano_Carton_DistinguishesCambioUltimoAndCambioAbajo()
-    {
-        var composer = new DefaultSignalComposer();
-        var snapshot1 = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true);
-
-        var enter = composer.Compose(new OperationRequest
+        var update = composer.Compose(new OperationRequest
         {
-            OperatorId = "op1",
+            OperatorId = "op_carton",
             Module = GraphicModule.Carton,
-            Scene = "ULTIMO_ESCANO",
+            CartonKind = CartonKind.UltimoEscano,
+            Scene = "ULTIMOESCANO",
+            Action = OperationActionType.Update,
+            Oficiales = true
+        }, snapshot with { VotantesFaltan = 92 });
+
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>UltimoEscano/Ganador','MAP_STRING_PAR','00004');",
+                "itemset('<{BD}>UltimoEscano/Segundo','MAP_STRING_PAR','00002');",
+                "itemset('<{BD}>UltimoEscano/Lugar','MAP_STRING_PAR','Castilla y la mancha');",
+                "itemset('<{BD}>UltimoEscano/NewPendientes','MAP_INT_PAR',92);",
+                "itemset('<{BD}>UltimoEscano/NewVotos','MAP_INT_PAR',224);",
+                "itemset('<{BD}>ULTIMOESCANO/ACTUALIZA','EVENT_RUN');"),
+            update);
+
+        var exit = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.UltimoEscano,
+            Scene = "ULTIMOESCANO",
+            Action = OperationActionType.Exit,
+            Oficiales = true
+        }, snapshot);
+
+        Assert.Equal("itemset('<{BD}>ULTIMOESCANO/SALE','EVENT_RUN');", exit);
+
+        var blockedSondeo = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.UltimoEscano,
+            Scene = "ULTIMOESCANO",
             Action = OperationActionType.Enter,
-            Oficiales = true
-        }, snapshot1);
+            Oficiales = false
+        }, snapshot);
 
-        Assert.Contains("itemset('<{BD}>UltimoEscanoN/ENTRA','EVENT_RUN');", enter);
-
-        // 1. Cambia solo el partido en lucha (LuchaUltimoEscano pasa de PSOE=00002 a VOX=00003)
-        var partidosCambioLucha = snapshot1.Partidos
-            .Select(p => p.Codigo switch
-            {
-                "00002" => p with { LuchaUltimoEscano = 0 },
-                "00003" => p with { LuchaUltimoEscano = 1 },
-                _ => p
-            })
-            .ToList();
-        var snapshotCambioLucha = snapshot1 with { Partidos = partidosCambioLucha };
-
-        var updateAbajo = composer.Compose(new OperationRequest
-        {
-            OperatorId = "op1",
-            Module = GraphicModule.Carton,
-            Scene = "ULTIMO_ESCANO",
-            Action = OperationActionType.Update,
-            Oficiales = true
-        }, snapshotCambioLucha);
-
-        Assert.Contains("itemset('<{BD}>UltimoEscanoN/CambioAbajo','EVENT_RUN');", updateAbajo);
-
-        // 2. Cambia el partido con el último escaño (EsUltimoEscano pasa de PP=00001 a SUMAR=00004)
-        var partidosCambioUltimo = snapshotCambioLucha.Partidos
-            .Select(p => p.Codigo switch
-            {
-                "00001" => p with { EsUltimoEscano = 0 },
-                "00004" => p with { EsUltimoEscano = 1 },
-                _ => p
-            })
-            .ToList();
-        var snapshotCambioUltimo = snapshotCambioLucha with { Partidos = partidosCambioUltimo };
-
-        var updateCambio = composer.Compose(new OperationRequest
-        {
-            OperatorId = "op1",
-            Module = GraphicModule.Carton,
-            Scene = "ULTIMO_ESCANO",
-            Action = OperationActionType.Update,
-            Oficiales = true
-        }, snapshotCambioUltimo);
-
-        Assert.Contains("itemset('<{BD}>UltimoEscanoN/Cambio','EVENT_RUN');", updateCambio);
+        Assert.Equal(string.Empty, blockedSondeo);
     }
 }
-

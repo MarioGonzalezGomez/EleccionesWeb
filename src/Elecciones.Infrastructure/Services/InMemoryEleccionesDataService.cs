@@ -1,5 +1,6 @@
 using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
+using Elecciones.Infrastructure.Csv.Cartones;
 
 namespace Elecciones.Infrastructure.Services;
 
@@ -7,11 +8,19 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
 {
     private static readonly IReadOnlyList<CircunscripcionSummary> Circunscripciones =
     [
-        new("9900000", "Espana"),
-        new("0200000", "Aragon"),
-        new("2800000", "Madrid"),
-        new("0800000", "Barcelona"),
-        new("4100000", "Sevilla")
+        new("9900000", "España"),
+        new("0100000", "Andalucía"),
+        new("0129000", "Málaga"),
+        new("0141000", "Sevilla"),
+        new("0141091", "Sevilla Capital"),
+        new("0200000", "Aragón"),
+        new("0250000", "Zaragoza"),
+        new("0900000", "Cataluña"),
+        new("0908000", "Barcelona"),
+        new("0908019", "Barcelona Capital"),
+        new("1200000", "Madrid"),
+        new("1400000", "País Vasco"),
+        new("1448000", "Bizkaia")
     ];
 
     private static readonly IReadOnlyList<MedioSummary> Medios =
@@ -119,16 +128,30 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
 
         var mayoriasCircunscripciones = new List<CircunscripcionMayoriaSnapshot>
         {
-            new("0100000", "Andalucía", "00001", "PP", 61, 25, 81.20, 65.40),
-            new("0104000", "Almería", "00001", "PP", 6, 3, 83.10, 64.20),
-            new("0141000", "Sevilla", "00002", "PSOE", 12, 6, 79.40, 66.80),
-            new("0200000", "Aragón", "00001", "PP", 13, 7, 85.00, 67.10),
-            new("0250000", "Zaragoza", "00001", "PP", 7, 4, 86.30, 68.00),
-            new("0900000", "Cataluña", "00002", "PSOE", 48, 19, 80.50, 63.90),
-            new("0908000", "Barcelona", "00002", "PSOE", 32, 13, 79.80, 64.50),
-            new("1200000", "Comunidad de Madrid", "00001", "PP", 37, 16, 88.20, 70.40),
-            new("1228000", "Madrid", "00001", "PP", 37, 16, 88.20, 70.40),
-            new("9900000", "España", slot == 3 ? "00002" : "00001", slot == 3 ? "PSOE" : "PP", 350, 137, escrutadoGeneral, 66.20)
+            new("0100000", "Andalucía", "00001", "PP", 61, 25, 81.20, 65.40, 4),
+            new("0104000", "Almería", "00001", "PP", 6, 3, 83.10, 64.20, 1),
+            new("0141000", "Sevilla", "00002", "PSOE", 12, 6, 79.40, 66.80, -1),
+            new("0200000", "Aragón", "00001", "PP", 13, 7, 85.00, 67.10, 2),
+            new("0250000", "Zaragoza", "00001", "PP", 7, 4, 86.30, 68.00, 1),
+            new("0900000", "Cataluña", "00002", "PSOE", 48, 19, 80.50, 63.90, 0),
+            new("0908000", "Barcelona", "00002", "PSOE", 32, 13, 79.80, 64.50, -1),
+            new("1200000", "Comunidad de Madrid", "00001", "PP", 37, 16, 88.20, 70.40, 5),
+            new("1228000", "Madrid", "00001", "PP", 37, 16, 88.20, 70.40, 5),
+            new("9900000", "España", slot == 3 ? "00002" : "00001", slot == 3 ? "PSOE" : "PP", 350, 137, escrutadoGeneral, 66.20, slot == 3 ? 1 : 48)
+        };
+
+        var sondeoMayoriasCircunscripciones = new List<CircunscripcionMayoriaSnapshot>
+        {
+            new("0100000", "Andalucía", "00001", "PP", 61, 26, 81.20, 65.40, 5),
+            new("0104000", "Almería", "00001", "PP", 6, 3, 83.10, 64.20, 1),
+            new("0141000", "Sevilla", "00002", "PSOE", 12, 5, 79.40, 66.80, -2),
+            new("0200000", "Aragón", "00001", "PP", 13, 7, 85.00, 67.10, 2),
+            new("0250000", "Zaragoza", "00001", "PP", 7, 4, 86.30, 68.00, 1),
+            new("0900000", "Cataluña", "00002", "PSOE", 48, 20, 80.50, 63.90, 1),
+            new("0908000", "Barcelona", "00002", "PSOE", 32, 14, 79.80, 64.50, 0),
+            new("1200000", "Comunidad de Madrid", "00001", "PP", 37, 17, 88.20, 70.40, 6),
+            new("1228000", "Madrid", "00001", "PP", 37, 17, 88.20, 70.40, 6),
+            new("9900000", "España", slot == 3 ? "00002" : "00001", slot == 3 ? "PSOE" : "PP", 350, 140, escrutadoGeneral, 66.20, slot == 3 ? 2 : 51)
         };
 
         var snapshot = new BrainStormSnapshot
@@ -152,7 +175,20 @@ public sealed class InMemoryEleccionesDataService : IEleccionesDataService
             GeneratedAtUtc = DateTime.UtcNow,
             Partidos = partidos,
             PartidosCircunscripcionCompletos = partidosCompletos,
-            MayoriasCircunscripciones = mayoriasCircunscripciones
+            PartidosEleccion = partidosCompletos
+                .Where(p => !string.Equals(DatosPartidosCsvBuilder.NormalizePartyCode(p.Codigo), "0", StringComparison.Ordinal))
+                .GroupBy(p => DatosPartidosCsvBuilder.NormalizePartyCode(p.Codigo), StringComparer.OrdinalIgnoreCase)
+                .Select(g =>
+                {
+                    var p = g.First();
+                    var code = DatosPartidosCsvBuilder.FormatFiveDigitPartyCode(p.Codigo);
+                    return new PartidoEleccionSummary(code, p.Siglas, p.Nombre, p.Padre);
+                })
+                .OrderBy(p => DatosPartidosCsvBuilder.ParseSortablePartyCode(p.Codigo))
+                .ThenBy(p => DatosPartidosCsvBuilder.NormalizePartyCode(p.Codigo), StringComparer.Ordinal)
+                .ToList(),
+            MayoriasCircunscripciones = mayoriasCircunscripciones,
+            SondeoMayoriasCircunscripciones = sondeoMayoriasCircunscripciones
         };
 
         return Task.FromResult(snapshot);

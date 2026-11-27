@@ -1,0 +1,332 @@
+@using System.Globalization
+@using System.Text
+@using Elecciones.Application.Models
+@using Elecciones.Application.Services
+
+<div class="ws-tree-select @(Disabled ? "is-disabled" : string.Empty)" @onkeydown="HandleKeyDown">
+    <button id="@Id"
+            type="button"
+            class="ws-tree-trigger @(isOpen && !Disabled ? "is-open" : string.Empty)"
+            disabled="@Disabled"
+            aria-haspopup="tree"
+            aria-expanded="@(isOpen && !Disabled)"
+            @onclick="ToggleOpen">
+        @if (!string.IsNullOrWhiteSpace(SelectedItem?.Codigo))
+        {
+            <span class="ws-tree-trigger-code ws-mono">@SelectedItem!.Codigo</span>
+            <span class="ws-tree-trigger-name" title="@SelectedItem.Nombre">@SelectedItem.Nombre</span>
+        }
+        else
+        {
+            <span class="ws-tree-trigger-name text-muted">Seleccionar circunscripción</span>
+        }
+        <svg class="ws-tree-trigger-chevron @(isOpen && !Disabled ? "is-open" : string.Empty)"
+             width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+    </button>
+
+    @if (isOpen && !Disabled)
+    {
+        <div class="ws-tree-backdrop" @onclick="ClosePopover"></div>
+
+        <div class="ws-tree-popover" role="dialog" aria-label="Selector jerárquico de circunscripción">
+            <div class="ws-tree-toolbar">
+                <div class="ws-tree-search-wrap">
+                    <svg class="ws-tree-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="11" cy="11" r="8" />
+                        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                    <input @ref="searchInputRef"
+                           type="text"
+                           class="form-control form-control-sm ws-tree-search-input"
+                           placeholder="Buscar comunidad, provincia o ciudad..."
+                           @bind="searchText"
+                           @bind:event="oninput" />
+                    @if (!string.IsNullOrWhiteSpace(searchText))
+                    {
+                        <button type="button"
+                                class="ws-tree-search-clear"
+                                title="Limpiar filtro"
+                                aria-label="Limpiar búsqueda"
+                                @onclick="() => searchText = string.Empty">
+                            ×
+                        </button>
+                    }
+                </div>
+
+                @if (HasExpandableNodes && string.IsNullOrWhiteSpace(searchText))
+                {
+                    <button type="button"
+                            class="ws-btn ws-btn-xs ws-tree-collapse-btn"
+                            title="@(expandedCodes.Count > 0 ? "Contraer todas las ramas" : "Expandir todas las ramas")"
+                            @onclick="ToggleAllBranches">
+                        @(expandedCodes.Count > 0 ? "Contraer" : "Expandir")
+                    </button>
+                }
+            </div>
+
+            <div class="ws-tree-scroll" role="tree">
+                @if (VisibleTree.Count == 0)
+                {
+                    <div class="ws-tree-empty">Sin coincidencias para «@searchText».</div>
+                }
+                else
+                {
+                    @foreach (var rootNode in VisibleTree)
+                    {
+                        @RenderNode(rootNode)
+                    }
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Id { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<CircunscripcionSummary> Items { get; set; } = [];
+    [Parameter] public string Value { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    private readonly HashSet<string> expandedCodes = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<CircunscripcionTreeNode> fullTree = [];
+    private IReadOnlyList<CircunscripcionSummary>? lastItemsRef;
+    private ElementReference searchInputRef;
+    private bool shouldFocusSearch;
+    private bool isOpen;
+    private string searchText = string.Empty;
+
+    private CircunscripcionSummary? SelectedItem =>
+        Items.FirstOrDefault(x => string.Equals(x.Codigo, Value, StringComparison.OrdinalIgnoreCase))
+        ?? Items.FirstOrDefault();
+
+    private bool HasExpandableNodes => fullTree.Any(n => n.HasChildren);
+
+    private IReadOnlyList<CircunscripcionTreeNode> VisibleTree =>
+        string.IsNullOrWhiteSpace(searchText)
+            ? fullTree
+            : FilterTree(fullTree, NormalizeForSearch(searchText));
+
+    protected override void OnParametersSet()
+    {
+        if (Disabled && isOpen)
+        {
+            isOpen = false;
+        }
+
+        if (!ReferenceEquals(lastItemsRef, Items))
+        {
+            lastItemsRef = Items;
+            fullTree = CircunscripcionTreeBuilder.Build(Items);
+            expandedCodes.Clear();
+            ExpandAncestorsOfSelected();
+        }
+    }
+
+    private void ToggleOpen()
+    {
+        if (Disabled)
+        {
+            return;
+        }
+
+        isOpen = !isOpen;
+        if (isOpen)
+        {
+            searchText = string.Empty;
+            ExpandAncestorsOfSelected();
+            shouldFocusSearch = true;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (shouldFocusSearch && isOpen && !Disabled)
+        {
+            shouldFocusSearch = false;
+            try
+            {
+                await searchInputRef.FocusAsync();
+            }
+            catch
+            {
+                // Ignorar si el popover se cerró antes de completar el foco
+            }
+        }
+    }
+
+    private void ClosePopover()
+    {
+        isOpen = false;
+    }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && isOpen)
+        {
+            isOpen = false;
+        }
+    }
+
+    private void ExpandAncestorsOfSelected()
+    {
+        foreach (var code in CircunscripcionTreeBuilder.FindAncestorCodes(fullTree, Value))
+        {
+            expandedCodes.Add(code);
+        }
+    }
+
+    private bool IsExpanded(CircunscripcionTreeNode node)
+    {
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            return true;
+        }
+
+        return expandedCodes.Contains(node.Codigo);
+    }
+
+    private void ToggleBranch(string code)
+    {
+        if (!expandedCodes.Add(code))
+        {
+            expandedCodes.Remove(code);
+        }
+    }
+
+    private void ToggleAllBranches()
+    {
+        if (expandedCodes.Count > 0)
+        {
+            expandedCodes.Clear();
+            return;
+        }
+
+        AddAllExpandableCodesRecursive(fullTree);
+    }
+
+    private void AddAllExpandableCodesRecursive(IEnumerable<CircunscripcionTreeNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.HasChildren)
+            {
+                expandedCodes.Add(node.Codigo);
+                AddAllExpandableCodesRecursive(node.Children);
+            }
+        }
+    }
+
+    private async Task SelectNodeAsync(string code)
+    {
+        isOpen = false;
+        if (!string.Equals(Value, code, StringComparison.OrdinalIgnoreCase))
+        {
+            await ValueChanged.InvokeAsync(code);
+        }
+    }
+
+    private RenderFragment RenderNode(CircunscripcionTreeNode node) => __builder =>
+    {
+        var expanded = IsExpanded(node);
+        var isSelected = string.Equals(node.Codigo, Value, StringComparison.OrdinalIgnoreCase);
+        var isGeneral = node.Codigo.StartsWith("99", StringComparison.Ordinal);
+
+        <div @key="node.Codigo" class="ws-tree-branch ws-tree-level-@node.Level" role="treeitem" aria-expanded="@(node.HasChildren ? expanded : null)" aria-selected="@isSelected">
+            <div class="ws-tree-row @(isSelected ? "is-selected" : string.Empty) @(isGeneral ? "is-general" : string.Empty)">
+                @if (node.HasChildren)
+                {
+                    <button type="button"
+                            class="ws-tree-expander @(expanded ? "is-expanded" : string.Empty)"
+                            title="@(expanded ? "Contraer" : "Desplegar")"
+                            aria-label="@(expanded ? $"Contraer {node.Nombre}" : $"Desplegar {node.Nombre}")"
+                            @onclick="() => ToggleBranch(node.Codigo)"
+                            @onclick:stopPropagation="true">
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                            <path d="m6 4 4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                    </button>
+                }
+                else
+                {
+                    <span class="ws-tree-leaf-spacer" aria-hidden="true"></span>
+                }
+
+                <button type="button"
+                        class="ws-tree-item-btn"
+                        @onclick="() => SelectNodeAsync(node.Codigo)">
+                    <span class="ws-tree-item-label">@node.Nombre</span>
+                    <span class="ws-tree-item-meta">
+                        @if (node.HasChildren)
+                        {
+                            <span class="ws-tree-count-badge ws-num" title="Subcircunscripciones">@node.Children.Count</span>
+                        }
+                        <span class="ws-tree-code-tag ws-mono">@node.Codigo</span>
+                    </span>
+                </button>
+            </div>
+
+            @if (node.HasChildren && expanded)
+            {
+                <div class="ws-tree-children" role="group">
+                    @foreach (var child in node.Children)
+                    {
+                        @RenderNode(child)
+                    }
+                </div>
+            }
+        </div>
+    };
+
+    private static IReadOnlyList<CircunscripcionTreeNode> FilterTree(
+        IReadOnlyList<CircunscripcionTreeNode> nodes,
+        string normalizedQuery)
+    {
+        var list = new List<CircunscripcionTreeNode>();
+        foreach (var node in nodes)
+        {
+            var selfMatches = NormalizeForSearch(node.Nombre).Contains(normalizedQuery, StringComparison.Ordinal)
+                              || NormalizeForSearch(node.Codigo).Contains(normalizedQuery, StringComparison.Ordinal);
+
+            if (selfMatches)
+            {
+                // Si coincide la comunidad o provincia, mantenemos visibles sus hijos para elegir rápido
+                list.Add(node);
+                continue;
+            }
+
+            if (node.HasChildren)
+            {
+                var filteredChildren = FilterTree(node.Children, normalizedQuery);
+                if (filteredChildren.Count > 0)
+                {
+                    list.Add(node with { Children = filteredChildren });
+                }
+            }
+        }
+
+        return list;
+    }
+
+    private static string NormalizeForSearch(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return string.Empty;
+        }
+
+        var decomposed = input.Trim().Normalize(NormalizationForm.FormD);
+        var sb = new StringBuilder(decomposed.Length);
+        foreach (var ch in decomposed)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark)
+            {
+                sb.Append(char.ToLowerInvariant(ch));
+            }
+        }
+
+        return sb.ToString();
+    }
+}

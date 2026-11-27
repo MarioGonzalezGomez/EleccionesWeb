@@ -151,13 +151,17 @@ public sealed class OperationStateService : IOperationStateService
             state.Oficiales = request.Oficiales;
             state.ElectionSlot = Math.Clamp(request.Query?.ElectionSlot ?? state.ElectionSlot, 1, 3);
             state.ExportName = string.IsNullOrWhiteSpace(request.ExportName) ? "BrainStorm" : request.ExportName.Trim();
-            if (request.Module == GraphicModule.Carton)
+            if (request.Module == GraphicModule.Carton && request.Command == GraphicCommand.None)
             {
                 state.CartonKind = CartonKindResolver.Resolve(request);
             }
             state.Target = request.Target;
-            state.ActiveQuery = request.Query;
-            state.PreviewQuery = request.Query;
+            var isPureLanguageCmd = GraphicLanguageExtensions.TryFromCommand(request.Command, out _);
+            if (!isPureLanguageCmd && (request.Command == GraphicCommand.None || !state.IsOnAir || state.ActiveQuery is null))
+            {
+                state.ActiveQuery = request.Query;
+                state.PreviewQuery = request.Query;
+            }
             state.UpdatedAtUtc = DateTimeOffset.UtcNow;
 
             if (request.Action == OperationActionType.Reset)
@@ -300,6 +304,16 @@ public sealed class OperationStateService : IOperationStateService
             case GraphicCommand.CambioEleccionesNacional:
                 state.AmbitoEuropaEnabled = false;
                 break;
+
+            case GraphicCommand.IdiomaCastellano:
+            case GraphicCommand.IdiomaEuskera:
+            case GraphicCommand.IdiomaCatalan:
+            case GraphicCommand.IdiomaGallego:
+                if (GraphicLanguageExtensions.TryFromCommand(request.Command, out var lang))
+                {
+                    state.GraphicLanguage = lang;
+                }
+                break;
         }
     }
 
@@ -336,6 +350,7 @@ public sealed class OperationStateService : IOperationStateService
         public SnapshotQuery? PreviewQuery { get; set; }
         public int ElectionSlot { get; set; } = electionSlot;
         public bool Oficiales { get; set; } = oficiales;
+        public GraphicLanguage GraphicLanguage { get; set; } = GraphicLanguage.Castellano;
         public string ExportName { get; set; } = "BrainStorm";
         public GraphicsTarget Target { get; set; } = GraphicsTarget.Both;
         public string LastOperatorId { get; set; } = string.Empty;
@@ -368,6 +383,7 @@ public sealed class OperationStateService : IOperationStateService
             PreviewQuery = PreviewQuery,
             ElectionSlot = ElectionSlot,
             Oficiales = Oficiales,
+            GraphicLanguage = GraphicLanguage,
             ExportName = ExportName,
             Target = Target,
             LastOperatorId = LastOperatorId,

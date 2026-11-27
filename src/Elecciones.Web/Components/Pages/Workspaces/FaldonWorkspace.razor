@@ -8,8 +8,10 @@
 @using Elecciones.Application.Abstractions
 @using Elecciones.Application.Models
 @using Elecciones.Application.Services
+@using Elecciones.GraphicsGateway.Options
 @using Elecciones.Infrastructure.Options
 @using EleccionesWeb.Services
+@using Microsoft.Extensions.Options
 @inject IModuleLockService ModuleLockService
 @inject IOperationService OperationService
 @inject IEleccionesDataService DataService
@@ -17,6 +19,9 @@
 @inject ConfiguredOperatorAuthorizationService AuthConfig
 @inject IGlobalOperationalSettingsService GlobalSettingsService
 @inject IOperationStateService StateService
+@inject IOperationalConfigurationService ConfigService
+@inject IOptionsMonitor<GraphicsEndpointsOptions> GraphicsMonitor
+@inject IOptionsMonitor<DatabaseOptions> DatabaseMonitor
 @inject IConfiguration Configuration
 @inject AuthenticationStateProvider AuthenticationStateProvider
 
@@ -34,6 +39,13 @@
         <span class="ws-onair-pill @(moduleState.IsOnAir ? "ws-onair-active" : "ws-onair-idle")">
             <span class="ws-tally-dot"></span>
             @(moduleState.IsOnAir ? $"EN AIRE: {(string.IsNullOrWhiteSpace(moduleState.ActiveScene) ? ActiveSceneName : moduleState.ActiveScene)}" : "FUERA DE AIRE")
+        </span>
+        @{
+            var faldonIpf = GraphicsMonitor.CurrentValue.ResolveIpfForModule(GraphicModule.Faldon);
+        }
+        <span class="ws-chip @(faldonIpf.Enabled ? string.Empty : "ws-chip-danger") ws-mono"
+              title="Destino Brainstorm asignado al módulo de Faldón">
+            Brainstorm: <strong>@(faldonIpf.Enabled ? $"{faldonIpf.Host}:{faldonIpf.Port} ({faldonIpf.Bd})" : "OFF")</strong>
         </span>
         @if (moduleOficiales && EffectiveEscrutadoGeneral.HasValue)
         {
@@ -68,24 +80,21 @@
             <select id="faldon-slot-select"
                     class="form-select form-select-sm ws-select-slot"
                     value="@moduleElectionSlot"
+                    disabled="@(ActiveElections.Count <= 1)"
                     @onchange="OnModuleElectionSlotChangedAsync">
-                <option value="1">Elección 1</option>
-                <option value="2">Elección 2</option>
-                <option value="3">Elección 3</option>
+                @foreach (var elec in ActiveElections)
+                {
+                    <option @key="elec.Slot" value="@elec.Slot">@elec.Label</option>
+                }
             </select>
         </div>
 
         <div class="ws-inline-field">
             <label for="faldon-circ-select">Circunscripción:</label>
-            <select id="faldon-circ-select"
-                    class="form-select form-select-sm ws-select-circ"
-                    value="@selectedCircunscripcionCodigo"
-                    @onchange="OnCircunscripcionChangedAsync">
-                @foreach (var circ in circunscripciones)
-                {
-                    <option value="@circ.Codigo">@circ.Codigo - @circ.Nombre</option>
-                }
-            </select>
+            <CircunscripcionTreeSelector Id="faldon-circ-select"
+                                         Items="@circunscripciones"
+                                         Value="@selectedCircunscripcionCodigo"
+                                         ValueChanged="OnCircunscripcionSelectedAsync" />
         </div>
 
         @if (!moduleOficiales)
@@ -98,11 +107,26 @@
                         @onchange="OnMedioChangedAsync">
                     @foreach (var medio in medios)
                     {
-                        <option value="@medio.Codigo">@medio.Descripcion</option>
+                        <option @key="@($"{moduleElectionSlot}_{medio.Codigo}")" value="@medio.Codigo">@medio.Descripcion</option>
                     }
                 </select>
             </div>
         }
+
+        <div class="ws-inline-field">
+            <label for="faldon-lang-select">Idioma:</label>
+            <select id="faldon-lang-select"
+                    class="form-select form-select-sm ws-select-lang"
+                    value="@moduleLanguage"
+                    disabled="@(!CanExecute)"
+                    title="Envía el evento de idioma al Brainstorm de Faldón sin alterar la interfaz web"
+                    @onchange="OnGraphicLanguageChangedAsync">
+                @foreach (var lang in Enum.GetValues<GraphicLanguage>())
+                {
+                    <option value="@lang">@lang.ToDisplayName()</option>
+                }
+            </select>
+        </div>
 
         <WorkspaceQuickNav Current="WorkspaceKind.Faldon" OperatorId="@operatorId" />
     </div>
@@ -130,15 +154,17 @@
             </div>
         }
 
-        <div class="ws-tabs">
-            @foreach (var mode in Enum.GetValues<FaldonMode>())
-            {
-                <button type="button"
-                        class="ws-tab-btn @(activeMode == mode ? "active" : null)"
-                        @onclick="() => SelectMode(mode)">
-                    @GetModeLabel(mode)
-                </button>
-            }
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 ws-tabs-header-row">
+            <div class="ws-tabs mb-0">
+                @foreach (var mode in Enum.GetValues<FaldonMode>())
+                {
+                    <button type="button"
+                            class="ws-tab-btn @(activeMode == mode ? "active" : null)"
+                            @onclick="() => SelectMode(mode)">
+                        @GetModeLabel(mode)
+                    </button>
+                }
+            </div>
         </div>
 
         <SceneActionBar SceneLabel="@ActiveSceneName"
@@ -450,6 +476,7 @@
     private ModuleOperationalState moduleState = new() { Module = GraphicModule.Faldon };
     private int moduleElectionSlot = 1;
     private bool moduleOficiales;
+    private GraphicLanguage moduleLanguage = GraphicLanguage.Castellano;
 
     private IReadOnlyList<CircunscripcionSummary> circunscripciones = [];
     private IReadOnlyList<MedioSummary> medios = [new("RTVE", "RTVE")];
@@ -468,6 +495,10 @@
     private bool loadingParties;
     private string feedbackMessage = string.Empty;
     private bool feedbackIsError;
+    private IDisposable? dbOptionsSubscription;
+
+    private IReadOnlyList<ActiveElectionDescriptor> ActiveElections =>
+        DatabaseMonitor.CurrentValue.GetActiveElections();
 
     private string ActiveSceneName => activeMode switch
     {
@@ -505,8 +536,13 @@
 
         globalSettings = GlobalSettingsService.GetSettings();
         moduleState = StateService.GetState(GraphicModule.Faldon);
-        moduleElectionSlot = moduleState.ElectionSlot;
+        moduleElectionSlot = DatabaseMonitor.CurrentValue.ClampSlot(moduleState.ElectionSlot);
         moduleOficiales = moduleState.Oficiales;
+        moduleLanguage = moduleState.GraphicLanguage;
+        if (moduleElectionSlot != moduleState.ElectionSlot)
+        {
+            moduleState = StateService.ConfigureModule(GraphicModule.Faldon, moduleElectionSlot, moduleOficiales);
+        }
 
         videoSources = LoadVideoSourcesFromConfig();
         selectedVideoSlot = videoSources.FirstOrDefault()?.Slot ?? 1;
@@ -514,6 +550,8 @@
         GlobalSettingsService.OnSettingsChanged += HandleGlobalSettingsChanged;
         StateService.OnStateChanged += HandleOperationalStateChanged;
         ModuleLockService.LocksChanged += HandleLocksChanged;
+        ConfigService.ConfigurationChanged += HandleConfigurationChanged;
+        dbOptionsSubscription = DatabaseMonitor.OnChange(_ => HandleConfigurationChanged());
 
         EnsureAutoLock();
         await ReloadReferenceDataAsync();
@@ -576,7 +614,7 @@
             return;
         }
 
-        var clamped = Math.Clamp(parsedSlot, 1, 3);
+        var clamped = DatabaseMonitor.CurrentValue.ClampSlot(parsedSlot);
         if (clamped == moduleElectionSlot)
         {
             return;
@@ -646,10 +684,21 @@
         }
     }
 
-    private async Task OnCircunscripcionChangedAsync(ChangeEventArgs args)
+    private async Task OnCircunscripcionSelectedAsync(string codigo)
     {
-        selectedCircunscripcionCodigo = args.Value?.ToString() ?? string.Empty;
+        selectedCircunscripcionCodigo = codigo ?? string.Empty;
         await LoadPartiesAsync();
+    }
+
+    private async Task OnGraphicLanguageChangedAsync(ChangeEventArgs args)
+    {
+        if (!Enum.TryParse<GraphicLanguage>(args.Value?.ToString(), out var selectedLang))
+        {
+            return;
+        }
+
+        moduleLanguage = selectedLang;
+        await RunCommandAsync(selectedLang.ToGraphicCommand());
     }
 
     private async Task OnMedioChangedAsync(ChangeEventArgs args)
@@ -660,23 +709,31 @@
 
     private async Task ReloadReferenceDataAsync()
     {
-        var previousCirc = selectedCircunscripcionCodigo;
-        var previousMedio = selectedMedioCodigo;
+        try
+        {
+            var previousCirc = selectedCircunscripcionCodigo;
+            var previousMedio = selectedMedioCodigo;
 
-        circunscripciones = await DataService.GetCircunscripcionesAsync(moduleElectionSlot, globalSettings.ConnectionType);
-        selectedCircunscripcionCodigo = circunscripciones.FirstOrDefault(x => x.Codigo == previousCirc)?.Codigo
-            ?? circunscripciones.FirstOrDefault()?.Codigo
-            ?? string.Empty;
+            circunscripciones = await DataService.GetCircunscripcionesAsync(moduleElectionSlot, globalSettings.ConnectionType);
+            selectedCircunscripcionCodigo = circunscripciones.FirstOrDefault(x => x.Codigo == previousCirc)?.Codigo
+                ?? circunscripciones.FirstOrDefault()?.Codigo
+                ?? string.Empty;
 
-        var loadedMedios = await DataService.GetMediosAsync(moduleElectionSlot, globalSettings.ConnectionType);
-        var list = new List<MedioSummary> { new("RTVE", "RTVE") };
-        list.AddRange(loadedMedios
-            .Where(x => !string.IsNullOrWhiteSpace(x.Codigo) && !string.Equals(x.Codigo, "RTVE", StringComparison.OrdinalIgnoreCase))
-            .DistinctBy(x => x.Codigo)
-            .Select(x => new MedioSummary(x.Codigo.Trim(), string.IsNullOrWhiteSpace(x.Descripcion) ? x.Codigo.Trim() : x.Descripcion.Trim())));
-        medios = list;
-        selectedMedioCodigo = medios.FirstOrDefault(x => string.Equals(x.Codigo, previousMedio, StringComparison.OrdinalIgnoreCase))?.Codigo
-            ?? "RTVE";
+            var loadedMedios = await DataService.GetMediosAsync(moduleElectionSlot, globalSettings.ConnectionType);
+            var list = new List<MedioSummary> { new("RTVE", "RTVE") };
+            list.AddRange(loadedMedios
+                .Where(x => !string.IsNullOrWhiteSpace(x.Codigo) && !string.Equals(x.Codigo, "RTVE", StringComparison.OrdinalIgnoreCase))
+                .DistinctBy(x => x.Codigo)
+                .Select(x => new MedioSummary(x.Codigo.Trim(), string.IsNullOrWhiteSpace(x.Descripcion) ? x.Codigo.Trim() : x.Descripcion.Trim())));
+            medios = list;
+            selectedMedioCodigo = medios.FirstOrDefault(x => string.Equals(x.Codigo, previousMedio, StringComparison.OrdinalIgnoreCase))?.Codigo
+                ?? "RTVE";
+        }
+        catch (Exception ex)
+        {
+            feedbackMessage = $"Error consultando circunscripciones de la elección activa: {ex.Message}";
+            feedbackIsError = true;
+        }
     }
 
     private async Task LoadPartiesAsync()
@@ -908,6 +965,7 @@
             moduleState = state;
             moduleElectionSlot = state.ElectionSlot;
             moduleOficiales = state.Oficiales;
+            moduleLanguage = state.GraphicLanguage;
 
             if (slotChanged)
             {
@@ -928,10 +986,29 @@
         _ = InvokeAsync(StateHasChanged);
     }
 
+    private void HandleConfigurationChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            var clamped = DatabaseMonitor.CurrentValue.ClampSlot(moduleElectionSlot);
+            if (clamped != moduleElectionSlot)
+            {
+                moduleElectionSlot = clamped;
+                moduleState = StateService.ConfigureModule(GraphicModule.Faldon, moduleElectionSlot, moduleOficiales);
+            }
+
+            await ReloadReferenceDataAsync();
+            await LoadPartiesAsync();
+            StateHasChanged();
+        });
+    }
+
     public void Dispose()
     {
         GlobalSettingsService.OnSettingsChanged -= HandleGlobalSettingsChanged;
         StateService.OnStateChanged -= HandleOperationalStateChanged;
         ModuleLockService.LocksChanged -= HandleLocksChanged;
+        ConfigService.ConfigurationChanged -= HandleConfigurationChanged;
+        dbOptionsSubscription?.Dispose();
     }
 }

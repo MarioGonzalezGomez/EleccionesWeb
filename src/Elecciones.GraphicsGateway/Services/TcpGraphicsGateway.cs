@@ -30,6 +30,11 @@ public sealed class TcpGraphicsGateway : IGraphicsGateway
         CancellationToken cancellationToken = default,
         GraphicModule? module = null)
     {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return [];
+        }
+
         var successfulTargets = new List<string>();
 
         foreach (var endpoint in ResolveTargets(target, module))
@@ -102,8 +107,29 @@ public sealed class TcpGraphicsGateway : IGraphicsGateway
 
     private static string ResolveMessageForEndpoint(string rawMessage, string bd)
     {
-        var selectedBd = string.IsNullOrWhiteSpace(bd) ? "dbs1" : bd.Trim();
-        return rawMessage.Replace("{BD}", selectedBd, StringComparison.OrdinalIgnoreCase);
+        var sanitizedBd = SanitizeBdIdentifier(bd);
+        return rawMessage.Replace("{BD}", sanitizedBd, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string SanitizeBdIdentifier(string? bd)
+    {
+        if (string.IsNullOrWhiteSpace(bd))
+        {
+            return "dbs1";
+        }
+
+        var cleaned = new StringBuilder(bd.Length);
+        foreach (var ch in bd.Trim())
+        {
+            if (ch is '\r' or '\n' or '\'' or '"' or ';' or '<' or '>')
+            {
+                continue;
+            }
+
+            cleaned.Append(ch);
+        }
+
+        return cleaned.Length == 0 ? "dbs1" : cleaned.ToString();
     }
 
     private IEnumerable<Endpoint> ResolveTargets(GraphicsTarget target, GraphicModule? module)
@@ -131,7 +157,7 @@ public sealed class TcpGraphicsGateway : IGraphicsGateway
             new("IPF", resolvedIpf.Enabled, resolvedIpf.Host, resolvedIpf.Port, resolvedIpf.Bd)
         };
 
-        if (options.SendToIpf2WithIpf)
+        if (options.SendToIpf2WithIpf && module != GraphicModule.Carton)
         {
             targets.Add(new Endpoint("IPF2", options.Ipf2.Enabled, options.Ipf2.Host, options.Ipf2.Port, options.Ipf2.Bd));
         }

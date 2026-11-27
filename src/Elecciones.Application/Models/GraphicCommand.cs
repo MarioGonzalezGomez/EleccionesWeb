@@ -53,5 +53,11 @@ public enum GraphicCommand
     CcaaBaja = 71,
     MayoriasSube = 72,
     MayoriasBaja = 73,
-    CarruselEncadena = 74
+    CarruselEncadena = 74,
+    CartonPagina = 75,
+
+    IdiomaCastellano = 80,
+    IdiomaEuskera = 81,
+    IdiomaCatalan = 82,
+    IdiomaGallego = 83
 }

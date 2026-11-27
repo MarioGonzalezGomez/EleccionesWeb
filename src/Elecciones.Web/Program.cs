@@ -51,25 +51,9 @@ if (string.IsNullOrWhiteSpace(dbOptions.Password))
     }
 }
 
-if (dbOptions.Enabled)
-{
-    var connectionString =
-        $"server={dbOptions.Host};port={dbOptions.Port};uid={dbOptions.User};pwd={dbOptions.Password};database={dbOptions.Name};";
-
-    builder.Services.AddDbContextFactory<EleccionesDbContext>(options =>
-    {
-        options.UseMySQL(connectionString, mysql =>
-        {
-            mysql.CommandTimeout(dbOptions.CommandTimeoutSeconds);
-        });
-    });
-
-    builder.Services.AddSingleton<IEleccionesDataService, MySqlEleccionesDataService>();
-}
-else
-{
-    builder.Services.AddSingleton<IEleccionesDataService, InMemoryEleccionesDataService>();
-}
+builder.Services.AddSingleton<MySqlEleccionesDataService>();
+builder.Services.AddSingleton<InMemoryEleccionesDataService>();
+builder.Services.AddSingleton<IEleccionesDataService, DynamicEleccionesDataService>();
 
 builder.Services.AddSingleton<IModuleLockStateStore, JsonFileModuleLockStateStore>();
 builder.Services.AddSingleton<IModuleLockService, ModuleLockService>();

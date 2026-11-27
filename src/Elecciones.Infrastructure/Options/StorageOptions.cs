@@ -86,11 +86,8 @@ public sealed class StorageOptions
 public sealed class CartonCsvFilesOptions
 {
     public string Delimiter { get; set; } = ";";
-    public string ParticipacionFileName { get; set; } = "Carton_Participacion.csv";
-    public string MayoriasPartidosFileName { get; set; } = "datos_partidos.csv";
-    public string MayoriasProvinciaFileName { get; set; } = "mayorias_provincias.csv";
-    public string EstatalPartidosFileName { get; set; } = "datos_partidos.csv";
-    public string EstatalProvinciaFileName { get; set; } = "Carton_Estatal_Provincia.csv";
-    public string CuadraditosFileName { get; set; } = "datos_partidos.csv";
-    public string UltimoEscanoFileName { get; set; } = "Carton_UltimoEscano.csv";
+    public string DatosPartidosFileName { get; set; } = "datos_partidos.csv";
+    public string MayoriasProvinciasFileName { get; set; } = "mayorias_provincias.csv";
+    public string DatosSondeoFileName { get; set; } = "datos_sondeo.csv";
+    public string SondeoProvinciasFileName { get; set; } = "sondeo_provincias.csv";
 }

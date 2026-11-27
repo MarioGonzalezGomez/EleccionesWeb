@@ -48,6 +48,16 @@ public sealed class DefaultSignalComposer : ISignalComposer
             return BuildPrimeCommandSignal(request.Command);
         }
 
+        if (GraphicLanguageExtensions.TryFromCommand(request.Command, out var graphicLanguage))
+        {
+            return EventRun(graphicLanguage.ToEventName());
+        }
+
+        if (request.Module == GraphicModule.Carton)
+        {
+            return ComposeCartonModule(request, snapshot);
+        }
+
         var scene = ResolveScene(request);
 
         var lines = new List<string>
@@ -85,11 +95,6 @@ public sealed class DefaultSignalComposer : ISignalComposer
         }
 
         if (TryComposeUltimoEscanoOnAirUpdate(request, snapshot, lines))
-        {
-            return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
-        }
-
-        if (request.Module == GraphicModule.Carton && TryComposeCartonScene(request, snapshot, scene, lines))
         {
             return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
         }
@@ -2026,21 +2031,253 @@ public sealed class DefaultSignalComposer : ISignalComposer
         return $"U:{string.Join(",", ultimo)}|L:{string.Join(",", lucha)}";
     }
 
-    private bool TryComposeCartonScene(OperationRequest request, BrainStormSnapshot snapshot, string scene, List<string> lines)
+    private string ComposeCartonModule(OperationRequest request, BrainStormSnapshot snapshot)
     {
-        var normalized = scene.ToUpperInvariant();
-        return normalized switch
+        if (request.Action == OperationActionType.Reset)
         {
-            "PARTICIPACION" => ComposeCartonParticipacion(request, snapshot, lines),
-            "CCAA_CARTONES" => ComposeCartonCcaa(request, snapshot, lines),
-            "MAYORIAS" => ComposeCartonMayorias(request, snapshot, lines),
-            "ESTATAL" => ComposeCartonEstatal(request, snapshot, lines),
-            "CUADRADITOS" => ComposeCartonCuadraditos(request, snapshot, lines),
-            "CARRUSEL" => ComposeCartonCarrusel(request, snapshot, lines),
-            "CARTON_PARTIDOS" => ComposeCartonPartidos(request, snapshot, lines),
-            "ULTIMO_ESCANO" or "ULTIMOESCANO" => ComposeCartonUltimoEscano(request, lines),
-            _ => false
-        };
+            ClearModuleState(request.Module);
+            return EventRun("RESET");
+        }
+
+        var kind = CartonKindResolver.Resolve(request);
+
+        if (request.Command != GraphicCommand.None)
+        {
+            return request.Command switch
+            {
+                GraphicCommand.CartonPagina => kind switch
+                {
+                    CartonKind.Mayorias => EventRun(request.Oficiales ? "MAYORIAS/PAGINA" : "SONDEO_MAYORIAS/PAGINA"),
+                    CartonKind.Estatal => EventRun(request.Oficiales ? "ESTATAL/PAGINA" : "SONDEO_ESTATAL/PAGINA"),
+                    _ => string.Empty
+                },
+                _ => string.Empty
+            };
+        }
+
+        var lines = new List<string>();
+        var currentCircCode = snapshot.Circunscripcion.Codigo?.Trim() ?? string.Empty;
+
+        lock (_stateLock)
+        {
+            var state = GetOrCreateCartonState(request.Module);
+            var isPlaceChange = state.OnAirKind == kind
+                && !string.IsNullOrWhiteSpace(state.OnAirCircunscripcionCodigo)
+                && !string.Equals(state.OnAirCircunscripcionCodigo, currentCircCode, StringComparison.OrdinalIgnoreCase);
+
+            switch (kind)
+            {
+                case CartonKind.Participacion:
+                    ComposeCartonParticipacionNew(request, snapshot, state, currentCircCode, isPlaceChange, lines);
+                    break;
+                case CartonKind.Mayorias:
+                    ComposeCartonMayoriasNew(request, snapshot, state, currentCircCode, isPlaceChange, lines);
+                    break;
+                case CartonKind.Estatal:
+                    ComposeCartonEstatalNew(request, snapshot, state, currentCircCode, lines);
+                    break;
+                case CartonKind.UltimoEscano:
+                    ComposeCartonUltimoEscanoNew(request, snapshot, state, currentCircCode, lines);
+                    break;
+            }
+        }
+
+        return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
+    }
+
+    private static void ComposeCartonParticipacionNew(
+        OperationRequest request,
+        BrainStormSnapshot snapshot,
+        CartonState state,
+        string currentCircCode,
+        bool isPlaceChange,
+        List<string> lines)
+    {
+        switch (request.Action)
+        {
+            case OperationActionType.Enter:
+                AppendCartonParticipacionVariables(lines, snapshot);
+                lines.Add(EventRun("PARTICIPACION/ENTRA"));
+                state.SetOnAir(CartonKind.Participacion, currentCircCode, request.Oficiales);
+                break;
+
+            case OperationActionType.Update:
+                AppendCartonParticipacionVariables(lines, snapshot);
+                if (isPlaceChange)
+                {
+                    lines.Add(EventRun("PARTICIPACION/SIGUIENTE"));
+                    state.OnAirCircunscripcionCodigo = currentCircCode;
+                }
+                else
+                {
+                    lines.Add(EventRun("ACTUALIZAR"));
+                }
+                break;
+
+            case OperationActionType.Exit:
+                lines.Add(EventRun("PARTICIPACION/SALE"));
+                state.ClearOnAir();
+                break;
+        }
+    }
+
+    private static void AppendCartonParticipacionVariables(List<string> lines, BrainStormSnapshot snapshot)
+    {
+        lines.Add(ItemSetNumeric("Participacion/Historico", "MAP_FLOAT_PAR", Math.Round(snapshot.ParticipacionHistorica, 2)));
+        lines.Add(ItemSetNumeric("Participacion/Actual", "MAP_FLOAT_PAR", Math.Round(snapshot.Participacion, 2)));
+        lines.Add(ItemSetNumeric("Participacion/Media", "MAP_FLOAT_PAR", Math.Round(snapshot.ParticipacionMedia, 2)));
+        lines.Add(MapString("Participacion/CodigoLugar", snapshot.Circunscripcion.Codigo));
+        lines.Add(MapString("Participacion/ProvinciaNombre", snapshot.Circunscripcion.Nombre));
+    }
+
+    private static void ComposeCartonMayoriasNew(
+        OperationRequest request,
+        BrainStormSnapshot snapshot,
+        CartonState state,
+        string currentCircCode,
+        bool isPlaceChange,
+        List<string> lines)
+    {
+        var varRoot = request.Oficiales ? "Mayorias" : "SondeoMayorias";
+        var evtRoot = request.Oficiales ? "MAYORIAS" : "SONDEO_MAYORIAS";
+
+        switch (request.Action)
+        {
+            case OperationActionType.Enter:
+                lines.Add(EventRun("ACTUALIZAR"));
+                lines.Add(MapString($"{varRoot}/CodigoLugar", snapshot.Circunscripcion.Codigo));
+                lines.Add(MapString($"{varRoot}/Lugar", snapshot.Circunscripcion.Nombre));
+                lines.Add(EventRun($"{evtRoot}/ENTRA"));
+                state.SetOnAir(CartonKind.Mayorias, currentCircCode, request.Oficiales);
+                break;
+
+            case OperationActionType.Update:
+                lines.Add(EventRun("ACTUALIZAR"));
+                if (isPlaceChange)
+                {
+                    lines.Add(MapString($"{varRoot}/CodigoLugar", snapshot.Circunscripcion.Codigo));
+                    lines.Add(MapString($"{varRoot}/Lugar", snapshot.Circunscripcion.Nombre));
+                    lines.Add(EventRun($"{evtRoot}/CAMBIO"));
+                    state.OnAirCircunscripcionCodigo = currentCircCode;
+                }
+                break;
+
+            case OperationActionType.Exit:
+                var exitEvtRoot = state.OnAirKind == CartonKind.Mayorias
+                    ? (state.OnAirOficiales ? "MAYORIAS" : "SONDEO_MAYORIAS")
+                    : evtRoot;
+                lines.Add(EventRun($"{exitEvtRoot}/SALE"));
+                state.ClearOnAir();
+                break;
+        }
+    }
+
+    private static void ComposeCartonEstatalNew(
+        OperationRequest request,
+        BrainStormSnapshot snapshot,
+        CartonState state,
+        string currentCircCode,
+        List<string> lines)
+    {
+        var varRoot = request.Oficiales ? "Estatal" : "SondeoEstatal";
+        var evtRoot = request.Oficiales ? "ESTATAL" : "SONDEO_ESTATAL";
+        var lugar = string.IsNullOrWhiteSpace(snapshot.Circunscripcion.Nombre)
+            ? "España"
+            : snapshot.Circunscripcion.Nombre;
+
+        switch (request.Action)
+        {
+            case OperationActionType.Enter:
+                lines.Add(EventRun("ACTUALIZAR"));
+                lines.Add(MapString($"{varRoot}/Lugar", lugar));
+                lines.Add(EventRun($"{evtRoot}/ENTRA"));
+                state.SetOnAir(CartonKind.Estatal, currentCircCode, request.Oficiales);
+                break;
+
+            case OperationActionType.Update:
+                lines.Add(EventRun("ACTUALIZAR"));
+                break;
+
+            case OperationActionType.Exit:
+                var exitEvtRoot = state.OnAirKind == CartonKind.Estatal
+                    ? (state.OnAirOficiales ? "ESTATAL" : "SONDEO_ESTATAL")
+                    : evtRoot;
+                lines.Add(EventRun($"{exitEvtRoot}/SALE"));
+                state.ClearOnAir();
+                break;
+        }
+    }
+
+    private static void ComposeCartonUltimoEscanoNew(
+        OperationRequest request,
+        BrainStormSnapshot snapshot,
+        CartonState state,
+        string currentCircCode,
+        List<string> lines)
+    {
+        switch (request.Action)
+        {
+            case OperationActionType.Enter:
+                if (!request.Oficiales)
+                {
+                    return;
+                }
+
+                AppendCartonUltimoEscanoVariables(lines, snapshot);
+                lines.Add(EventRun("ULTIMOESCANO/ENTRA"));
+                state.SetOnAir(CartonKind.UltimoEscano, currentCircCode, request.Oficiales);
+                break;
+
+            case OperationActionType.Update:
+                if (!request.Oficiales)
+                {
+                    return;
+                }
+
+                AppendCartonUltimoEscanoVariables(lines, snapshot);
+                lines.Add(EventRun("ULTIMOESCANO/ACTUALIZA"));
+                state.OnAirCircunscripcionCodigo = currentCircCode;
+                break;
+
+            case OperationActionType.Exit:
+                lines.Add(EventRun("ULTIMOESCANO/SALE"));
+                state.ClearOnAir();
+                break;
+        }
+    }
+
+    private static void AppendCartonUltimoEscanoVariables(List<string> lines, BrainStormSnapshot snapshot)
+    {
+        var sourceParties = snapshot.PartidosCircunscripcionCompletos is { Count: > 0 }
+            ? snapshot.PartidosCircunscripcionCompletos
+            : snapshot.Partidos;
+
+        var ganador = sourceParties.FirstOrDefault(p => p.EsUltimoEscano != 0);
+        var segundo = sourceParties.FirstOrDefault(p => p.LuchaUltimoEscano != 0);
+
+        lines.Add(MapString("UltimoEscano/Ganador", FormatFiveDigitCartonPartyCode(ganador?.Codigo)));
+        lines.Add(MapString("UltimoEscano/Segundo", FormatFiveDigitCartonPartyCode(segundo?.Codigo)));
+        lines.Add(MapString("UltimoEscano/Lugar", snapshot.Circunscripcion.Nombre));
+        lines.Add(ItemSetNumeric("UltimoEscano/NewPendientes", "MAP_INT_PAR", snapshot.VotantesFaltan));
+        lines.Add(ItemSetNumeric("UltimoEscano/NewVotos", "MAP_INT_PAR", segundo?.RestoVotos ?? 0));
+    }
+
+    private static string FormatFiveDigitCartonPartyCode(string? rawCode)
+    {
+        if (string.IsNullOrWhiteSpace(rawCode))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = rawCode.Trim();
+        if (long.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numeric) && numeric > 0)
+        {
+            return numeric <= 99999
+                ? numeric.ToString("D5", CultureInfo.InvariantCulture)
+                : numeric.ToString(CultureInfo.InvariantCulture);
+        }
+
+        return trimmed;
     }
 
     private static bool ComposeCartonEstatal(OperationRequest request, BrainStormSnapshot snapshot, List<string> lines)
@@ -2604,6 +2841,22 @@ public sealed class DefaultSignalComposer : ISignalComposer
     private sealed class CartonState
     {
         public string CurrentCarruselSigla { get; set; } = string.Empty;
+        public CartonKind? OnAirKind { get; set; }
+        public string OnAirCircunscripcionCodigo { get; set; } = string.Empty;
+        public bool OnAirOficiales { get; set; } = true;
+
+        public void SetOnAir(CartonKind kind, string circunscripcionCodigo, bool oficiales)
+        {
+            OnAirKind = kind;
+            OnAirCircunscripcionCodigo = circunscripcionCodigo;
+            OnAirOficiales = oficiales;
+        }
+
+        public void ClearOnAir()
+        {
+            OnAirKind = null;
+            OnAirCircunscripcionCodigo = string.Empty;
+        }
     }
 
     private sealed class SedesState

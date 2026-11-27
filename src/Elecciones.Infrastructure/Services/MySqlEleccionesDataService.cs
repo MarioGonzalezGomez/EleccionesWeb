@@ -1,5 +1,6 @@
 using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
+using Elecciones.Infrastructure.Csv.Cartones;
 using Elecciones.Infrastructure.Data;
 using Elecciones.Infrastructure.Entities;
 using Elecciones.Infrastructure.Options;
@@ -11,19 +12,24 @@ namespace Elecciones.Infrastructure.Services;
 
 public sealed class MySqlEleccionesDataService : IEleccionesDataService
 {
-    private readonly DatabaseOptions _databaseOptions;
+    private readonly DatabaseOptions _staticDatabaseOptions;
+    private readonly IOptionsMonitor<DatabaseOptions>? _databaseMonitor;
     private readonly ILogger<MySqlEleccionesDataService> _logger;
     private readonly IOptionsMonitor<OperationalOptions>? _operationalMonitor;
 
     public MySqlEleccionesDataService(
         IOptions<DatabaseOptions> databaseOptions,
         ILogger<MySqlEleccionesDataService> logger,
-        IOptionsMonitor<OperationalOptions>? operationalMonitor = null)
+        IOptionsMonitor<OperationalOptions>? operationalMonitor = null,
+        IOptionsMonitor<DatabaseOptions>? databaseMonitor = null)
     {
-        _databaseOptions = databaseOptions.Value;
+        _staticDatabaseOptions = databaseOptions.Value;
+        _databaseMonitor = databaseMonitor;
         _logger = logger;
         _operationalMonitor = operationalMonitor;
     }
+
+    private DatabaseOptions DbOptions => _databaseMonitor?.CurrentValue ?? _staticDatabaseOptions;
 
     public async Task<IReadOnlyList<CircunscripcionSummary>> GetCircunscripcionesAsync(int electionSlot = 1, int connectionType = 0, CancellationToken cancellationToken = default)
     {
@@ -35,18 +41,22 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
 
         var regionalCode = ResolveRegionalCode(electionSlot);
         var mustFilterByRegional =
-            (!string.IsNullOrWhiteSpace(regionalCode) && _databaseOptions.TipoElecciones == 2)
-            || (!string.IsNullOrWhiteSpace(regionalCode) && _databaseOptions.Regional);
+            (!string.IsNullOrWhiteSpace(regionalCode) && DbOptions.TipoElecciones == 2)
+            || (!string.IsNullOrWhiteSpace(regionalCode) && DbOptions.Regional);
 
         if (mustFilterByRegional)
         {
             query = query.Where(x => x.Codigo.StartsWith(regionalCode));
         }
 
-        var data = await query
-            .OrderBy(x => x.Nombre)
+        var rawData = await query
             .Select(x => new CircunscripcionSummary(x.Codigo, x.Nombre))
             .ToListAsync(cancellationToken);
+
+        var data = rawData
+            .OrderBy(x => string.Equals(x.Codigo, "9900000", StringComparison.Ordinal) ? 0 : 1)
+            .ThenBy(x => x.Nombre, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
 
         return data;
     }
@@ -124,7 +134,7 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             avance = query.Avance.Value;
         }
         var participacion = await ResolveParticipacionDataAsync(db, contextCirc, avance, query.ElectionSlot, cancellationToken);
-        var (todasLasProvincias, provinciasAutonomia, mayoriasCircunscripciones) = await ResolveMapaYMayoriasAsync(
+        var (todasLasProvincias, provinciasAutonomia, mayoriasCircunscripciones, sondeoMayoriasCircunscripciones, partidosEleccion) = await ResolveMapaYMayoriasAsync(
             db,
             contextCirc,
             query.MedioCodigo,
@@ -167,9 +177,11 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             GeneratedAtUtc = DateTime.UtcNow,
             Partidos = partidos,
             PartidosCircunscripcionCompletos = partidosCircunscripcionCompletos,
+            PartidosEleccion = partidosEleccion,
             CsvTemplatePartidos = csvTemplatePartidos,
             ProvinciasAutonomia = provinciasAutonomia,
             MayoriasCircunscripciones = mayoriasCircunscripciones,
+            SondeoMayoriasCircunscripciones = sondeoMayoriasCircunscripciones,
             TodasLasProvinciasMapa = todasLasProvincias,
             VideoSlots = operational.VideoSources
                 .Select(v => new VideoSlotSnapshot(v.Slot, v.IsLive, v.Path ?? string.Empty))
@@ -180,7 +192,9 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
     private static async Task<(
         IReadOnlyList<string> TodasLasProvincias,
         IReadOnlyList<ProvinciaMapaSnapshot> ProvinciasAutonomia,
-        IReadOnlyList<CircunscripcionMayoriaSnapshot> MayoriasCircunscripciones)> ResolveMapaYMayoriasAsync(
+        IReadOnlyList<CircunscripcionMayoriaSnapshot> MayoriasCircunscripciones,
+        IReadOnlyList<CircunscripcionMayoriaSnapshot> SondeoMayoriasCircunscripciones,
+        IReadOnlyList<PartidoEleccionSummary> PartidosEleccion)> ResolveMapaYMayoriasAsync(
         EleccionesDbContext db,
         CircunscripcionEntity contextCirc,
         string? medioCodigo,
@@ -207,23 +221,31 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             .Include(x => x.Partido)
             .ToListAsync(cancellationToken);
 
-        if (!oficiales && !string.IsNullOrWhiteSpace(medioCodigo) && !IsRtve(medioCodigo))
+        if (!string.IsNullOrWhiteSpace(medioCodigo) && !IsRtve(medioCodigo))
         {
             await ApplyMedioSondeoOverlayAsync(db, allCps, medioCodigo.Trim(), cancellationToken);
         }
 
-        var winnerByCirc = allCps
+        var groupedByCirc = allCps
             .GroupBy(x => x.CodCircunscripcion, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                g => g.Key,
-                g => ResolveValidMajorityWinner(g.ToList(), oficiales),
-                StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var officialWinnerByCirc = groupedByCirc.ToDictionary(
+            kvp => kvp.Key,
+            kvp => ResolveValidMajorityWinner(kvp.Value, oficiales: true),
+            StringComparer.OrdinalIgnoreCase);
+
+        var sondeoWinnerByCirc = groupedByCirc.ToDictionary(
+            kvp => kvp.Key,
+            kvp => ResolveValidMajorityWinner(kvp.Value, oficiales: false),
+            StringComparer.OrdinalIgnoreCase);
 
         var mayoriasCircunscripciones = allCircs
             .Select(c =>
             {
-                var winner = winnerByCirc.GetValueOrDefault(c.Codigo);
-                var winnerSeats = winner is null ? 0 : (oficiales ? winner.EscaniosHasta : winner.EscaniosHastaSondeo);
+                var winner = officialWinnerByCirc.GetValueOrDefault(c.Codigo);
+                var winnerSeats = winner?.EscaniosHasta ?? 0;
+                var diff = winner is null ? 0 : winner.EscaniosHasta - winner.EscaniosHistoricos;
                 return new CircunscripcionMayoriaSnapshot(
                     c.Codigo.Trim(),
                     c.Nombre.Trim(),
@@ -232,9 +254,31 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
                     c.Escanios,
                     winnerSeats,
                     c.Escrutado,
-                    c.Participacion);
+                    c.Participacion,
+                    diff);
             })
             .ToList();
+
+        var sondeoMayoriasCircunscripciones = allCircs
+            .Select(c =>
+            {
+                var winner = sondeoWinnerByCirc.GetValueOrDefault(c.Codigo);
+                var winnerSeats = winner?.EscaniosHastaSondeo ?? 0;
+                var diff = winner is null ? 0 : winner.EscaniosHastaSondeo - winner.EscaniosHistoricos;
+                return new CircunscripcionMayoriaSnapshot(
+                    c.Codigo.Trim(),
+                    c.Nombre.Trim(),
+                    winner?.CodPartido ?? string.Empty,
+                    winner?.Partido?.Siglas ?? string.Empty,
+                    c.Escanios,
+                    winnerSeats,
+                    c.Escrutado,
+                    c.Participacion,
+                    diff);
+            })
+            .ToList();
+
+        var activeWinnerByCirc = oficiales ? officialWinnerByCirc : sondeoWinnerByCirc;
 
         List<CircunscripcionEntity> targetProvincias;
         if (contextCirc.Codigo.EndsWith("00000", StringComparison.Ordinal))
@@ -262,7 +306,7 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         var provinciasAutonomia = targetProvincias
             .Select(p =>
             {
-                var winner = winnerByCirc.GetValueOrDefault(p.Codigo);
+                var winner = activeWinnerByCirc.GetValueOrDefault(p.Codigo);
                 var winnerSeats = winner is null ? 0 : (oficiales ? winner.EscaniosHasta : winner.EscaniosHastaSondeo);
                 var winnerPct = winner is null ? 0.0 : (oficiales ? winner.Votos : winner.VotosSondeo);
                 return new ProvinciaMapaSnapshot(
@@ -279,7 +323,28 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             })
             .ToList();
 
-        return (todasLasProvincias, provinciasAutonomia, mayoriasCircunscripciones);
+        var partidosEleccion = allCps
+            .Where(x => !string.IsNullOrWhiteSpace(x.CodPartido)
+                && !string.Equals(DatosPartidosCsvBuilder.NormalizePartyCode(x.CodPartido), "0", StringComparison.Ordinal))
+            .GroupBy(x => DatosPartidosCsvBuilder.NormalizePartyCode(x.CodPartido), StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
+            {
+                var representative = g.FirstOrDefault(cp => !string.IsNullOrWhiteSpace(cp.Partido?.Siglas)) ?? g.First();
+                var formattedCode = DatosPartidosCsvBuilder.FormatFiveDigitPartyCode(representative.CodPartido);
+                var siglas = !string.IsNullOrWhiteSpace(representative.Partido?.Siglas)
+                    ? representative.Partido.Siglas.Trim()
+                    : formattedCode;
+                var nombre = representative.Partido?.Nombre?.Trim() ?? string.Empty;
+                var padre = !string.IsNullOrWhiteSpace(representative.Partido?.Padre)
+                    ? DatosPartidosCsvBuilder.FormatFiveDigitPartyCode(representative.Partido.Padre)
+                    : formattedCode;
+                return new PartidoEleccionSummary(formattedCode, siglas, nombre, padre);
+            })
+            .OrderBy(p => DatosPartidosCsvBuilder.ParseSortablePartyCode(p.Codigo))
+            .ThenBy(p => DatosPartidosCsvBuilder.NormalizePartyCode(p.Codigo), StringComparer.Ordinal)
+            .ToList();
+
+        return (todasLasProvincias, provinciasAutonomia, mayoriasCircunscripciones, sondeoMayoriasCircunscripciones, partidosEleccion);
     }
 
     private static CircunscripcionPartidoEntity? ResolveValidMajorityWinner(
@@ -561,23 +626,27 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
 
     private EleccionesDbContext CreateDbContextForElection(int electionSlot, int requestedConnectionType)
     {
-        var connectionType = ResolveConnectionType(electionSlot, requestedConnectionType);
-        var selectedHost = ResolveHost(connectionType);
-        var selectedDatabase = ResolveDatabaseName(electionSlot);
+        var opts = DbOptions;
+        var connectionType = ResolveConnectionType(opts, electionSlot, requestedConnectionType);
+        var selectedHost = ResolveHost(opts, connectionType);
+        var selectedDatabase = ResolveDatabaseName(opts, electionSlot);
+        var password = !string.IsNullOrWhiteSpace(opts.Password)
+            ? opts.Password
+            : (Environment.GetEnvironmentVariable("ELECCIONES_DB_PASSWORD") ?? string.Empty);
 
         var connectionString =
-            $"server={selectedHost};port={_databaseOptions.Port};uid={_databaseOptions.User};pwd={_databaseOptions.Password};database={selectedDatabase};";
+            $"server={selectedHost};port={opts.Port};uid={opts.User};pwd={password};database={selectedDatabase};";
 
         var builder = new DbContextOptionsBuilder<EleccionesDbContext>();
         builder.UseMySQL(connectionString, mysql =>
         {
-            mysql.CommandTimeout(_databaseOptions.CommandTimeoutSeconds);
+            mysql.CommandTimeout(Math.Max(2, opts.CommandTimeoutSeconds));
         });
 
         return new EleccionesDbContext(builder.Options);
     }
 
-    private int ResolveConnectionType(int electionSlot, int requestedConnectionType)
+    private static int ResolveConnectionType(DatabaseOptions opts, int electionSlot, int requestedConnectionType)
     {
         if (requestedConnectionType is >= 1 and <= 3)
         {
@@ -587,33 +656,34 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         var slot = electionSlot is >= 1 and <= 3 ? electionSlot : 1;
         var configured = slot switch
         {
-            2 => _databaseOptions.ConnectionDefault2,
-            3 => _databaseOptions.ConnectionDefault3,
-            _ => _databaseOptions.ConnectionDefault1
+            2 => opts.ConnectionDefault2,
+            3 => opts.ConnectionDefault3,
+            _ => opts.ConnectionDefault1
         };
 
         return configured is >= 1 and <= 3 ? configured : 1;
     }
 
-    private string ResolveHost(int connectionType)
+    private static string ResolveHost(DatabaseOptions opts, int connectionType)
     {
         return connectionType switch
         {
-            2 when !string.IsNullOrWhiteSpace(_databaseOptions.HostBackup) => _databaseOptions.HostBackup.Trim(),
-            3 when !string.IsNullOrWhiteSpace(_databaseOptions.HostLocal) => _databaseOptions.HostLocal.Trim(),
+            2 when !string.IsNullOrWhiteSpace(opts.HostBackup) => opts.HostBackup.Trim(),
+            3 when !string.IsNullOrWhiteSpace(opts.HostLocal) => opts.HostLocal.Trim(),
             3 => "127.0.0.1",
-            _ => _databaseOptions.Host.Trim()
+            _ => opts.Host.Trim()
         };
     }
 
     private string ResolveRegionalCode(int electionSlot)
     {
+        var opts = DbOptions;
         var slot = electionSlot is >= 1 and <= 3 ? electionSlot : 1;
         var raw = slot switch
         {
-            2 => _databaseOptions.CodigoRegionalBD2,
-            3 => _databaseOptions.CodigoRegionalBD3,
-            _ => _databaseOptions.CodigoRegionalBD1
+            2 => opts.CodigoRegionalBD2,
+            3 => opts.CodigoRegionalBD3,
+            _ => opts.CodigoRegionalBD1
         };
 
         return raw?.Trim() ?? string.Empty;
@@ -634,15 +704,15 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             .Where(x => x.CodCircunscripcion == targetCode)
             .ToListAsync(cancellationToken);
 
-        if (!oficiales && !string.IsNullOrWhiteSpace(medioCodigo) && !IsRtve(medioCodigo))
+        if (!string.IsNullOrWhiteSpace(medioCodigo) && !IsRtve(medioCodigo))
         {
             await ApplyMedioSondeoOverlayAsync(db, allCps, medioCodigo.Trim(), cancellationToken);
         }
 
         return BuildPartidoSnapshots(
-            OrderCpList(allCps, oficiales),
+            OrderCpList(allCps, oficiales: true),
             new SnapshotQuery { Kind = SnapshotQueryKind.Circunscripcion, IncludeZeroSeats = true },
-            oficiales,
+            oficiales: true,
             includeZeroSeats: true);
     }
 
@@ -676,7 +746,7 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
 
     private string ResolveParentCircunscripcionCode(CircunscripcionEntity contextCirc, int electionSlot)
     {
-        if (_databaseOptions.TipoElecciones == 1)
+        if (DbOptions.TipoElecciones == 1 && !DbOptions.Regional)
         {
             return "9900000";
         }
@@ -690,13 +760,13 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         return string.IsNullOrWhiteSpace(regionalCode) ? "9900000" : $"{regionalCode}00000";
     }
 
-    private string ResolveDatabaseName(int electionSlot)
+    private static string ResolveDatabaseName(DatabaseOptions opts, int electionSlot)
     {
         var slot = electionSlot is >= 1 and <= 3 ? electionSlot : 1;
 
-        var db1 = _databaseOptions.Name?.Trim() ?? string.Empty;
-        var db2 = _databaseOptions.Name2?.Trim() ?? string.Empty;
-        var db3 = _databaseOptions.Name3?.Trim() ?? string.Empty;
+        var db1 = opts.Name?.Trim() ?? string.Empty;
+        var db2 = opts.Name2?.Trim() ?? string.Empty;
+        var db3 = opts.Name3?.Trim() ?? string.Empty;
 
         return slot switch
         {

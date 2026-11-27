@@ -30,6 +30,18 @@ public sealed class GraphicsEndpointsOptions
 
         return Ipf;
     }
+
+    public void SetModuleIpf(GraphicModule module, GraphicsEndpointOptions endpoint)
+    {
+        IpfByModule ??= new Dictionary<string, GraphicsEndpointOverrideOptions>(StringComparer.OrdinalIgnoreCase);
+        IpfByModule[module.ToString()] = new GraphicsEndpointOverrideOptions
+        {
+            Enabled = endpoint.Enabled,
+            Host = string.IsNullOrWhiteSpace(endpoint.Host) ? "127.0.0.1" : endpoint.Host.Trim(),
+            Port = endpoint.Port,
+            Bd = string.IsNullOrWhiteSpace(endpoint.Bd) ? "dbs1" : endpoint.Bd.Trim()
+        };
+    }
 }
 
 public sealed class GraphicsEndpointOptions

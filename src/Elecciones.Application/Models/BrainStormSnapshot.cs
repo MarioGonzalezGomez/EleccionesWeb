@@ -35,9 +35,17 @@ public sealed record BrainStormSnapshot
     public DateTime GeneratedAtUtc { get; init; } = DateTime.UtcNow;
     public IReadOnlyList<PartidoSnapshot> Partidos { get; init; } = [];
     public IReadOnlyList<PartidoSnapshot> PartidosCircunscripcionCompletos { get; init; } = [];
+    public IReadOnlyList<PartidoEleccionSummary> PartidosEleccion { get; init; } = [];
     public IReadOnlyList<PartidoSnapshot> CsvTemplatePartidos { get; init; } = [];
     public IReadOnlyList<ProvinciaMapaSnapshot> ProvinciasAutonomia { get; init; } = [];
     public IReadOnlyList<CircunscripcionMayoriaSnapshot> MayoriasCircunscripciones { get; init; } = [];
+    public IReadOnlyList<CircunscripcionMayoriaSnapshot> SondeoMayoriasCircunscripciones { get; init; } = [];
     public IReadOnlyList<string> TodasLasProvinciasMapa { get; init; } = [];
     public IReadOnlyList<VideoSlotSnapshot> VideoSlots { get; init; } = [];
 }
+
+public sealed record PartidoEleccionSummary(
+    string Codigo,
+    string Siglas,
+    string Nombre = "",
+    string Padre = "");

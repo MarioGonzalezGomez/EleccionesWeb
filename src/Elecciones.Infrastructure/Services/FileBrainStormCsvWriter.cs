@@ -20,15 +20,6 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
     private const string BrainStormSondeoCodigoFileName = "Brainstorm_Sondeo_Codigo.csv";
 
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileGates = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly IReadOnlyDictionary<CartonKind, ICartonCsvFormatter> CartonFormatters =
-        new ICartonCsvFormatter[]
-        {
-            new ParticipacionCartonCsvFormatter(),
-            new MayoriasCartonCsvFormatter(),
-            new EstatalCartonCsvFormatter(),
-            new CuadraditosCartonCsvFormatter(),
-            new UltimoEscanoCartonCsvFormatter()
-        }.ToDictionary(f => f.Kind);
 
     private readonly StorageOptions? _staticOptions;
     private readonly IOptionsMonitor<StorageOptions>? _optionsMonitor;
@@ -192,33 +183,25 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
         var folderPath = ResolveCsvFolder(options.ResolveCsvFolderForModule(module));
         Directory.CreateDirectory(folderPath);
 
-        if (!CartonFormatters.TryGetValue(cartonKind, out var formatter))
+        var fileOptions = options.CartonCsvFiles ?? new CartonCsvFilesOptions();
+        var delimiter = string.IsNullOrEmpty(fileOptions.Delimiter) ? ";" : fileOptions.Delimiter;
+
+        IReadOnlyList<CartonCsvDescriptor> descriptors = cartonKind switch
         {
-            formatter = CartonFormatters[CartonKind.Participacion];
-        }
+            CartonKind.Mayorias or CartonKind.Estatal when snapshot.Oficiales =>
+            [
+                DatosPartidosCsvBuilder.Build(snapshot, CartonCsvRoles.DatosPartidos, fileOptions.DatosPartidosFileName),
+                MayoriasProvinciasCsvBuilder.Build(snapshot, CartonCsvRoles.MayoriasProvincias, fileOptions.MayoriasProvinciasFileName)
+            ],
+            CartonKind.Mayorias or CartonKind.Estatal =>
+            [
+                DatosSondeoCsvBuilder.Build(snapshot, CartonCsvRoles.DatosSondeo, fileOptions.DatosSondeoFileName),
+                SondeoProvinciasCsvBuilder.Build(snapshot, CartonCsvRoles.SondeoProvincias, fileOptions.SondeoProvinciasFileName)
+            ],
+            _ => []
+        };
 
-        var descriptors = formatter.BuildDocuments(
-            snapshot,
-            query ?? new SnapshotQuery(),
-            options.CartonCsvFiles ?? new CartonCsvFilesOptions());
-
-        var delimiter = options.CartonCsvFiles?.Delimiter ?? ";";
-        var artifacts = new List<CartonCsvFileArtifact>(descriptors.Count);
-
-        foreach (var descriptor in descriptors)
-        {
-            var filePath = Path.Combine(folderPath, descriptor.FileName);
-            var csvContent = CartonCsvFormattingHelpers.Serialize(descriptor, delimiter);
-            await WriteFileExclusivelyAsync(filePath, csvContent, cancellationToken);
-            _logger.LogInformation(
-                "Carton CSV ({Kind} / {Role}) generated at {Path}",
-                cartonKind,
-                descriptor.LogicalRole,
-                filePath);
-
-            artifacts.Add(new CartonCsvFileArtifact(descriptor.LogicalRole, descriptor.FileName, filePath));
-        }
-
+        var artifacts = await WriteCartonDescriptorsAsync(folderPath, descriptors, delimiter, cartonKind.ToString(), cancellationToken);
         return new CartonCsvExportResult(cartonKind, artifacts);
     }
 
@@ -234,32 +217,45 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
 
         var fileOptions = options.CartonCsvFiles ?? new CartonCsvFilesOptions();
         var delimiter = string.IsNullOrEmpty(fileOptions.Delimiter) ? ";" : fileOptions.Delimiter;
-        var safeQuery = query ?? new SnapshotQuery();
 
+        IReadOnlyList<CartonCsvDescriptor> descriptors =
+        [
+            DatosPartidosCsvBuilder.Build(snapshot, CartonCsvRoles.DatosPartidos, fileOptions.DatosPartidosFileName),
+            MayoriasProvinciasCsvBuilder.Build(snapshot, CartonCsvRoles.MayoriasProvincias, fileOptions.MayoriasProvinciasFileName),
+            DatosSondeoCsvBuilder.Build(snapshot, CartonCsvRoles.DatosSondeo, fileOptions.DatosSondeoFileName),
+            SondeoProvinciasCsvBuilder.Build(snapshot, CartonCsvRoles.SondeoProvincias, fileOptions.SondeoProvinciasFileName)
+        ];
+
+        return await WriteCartonDescriptorsAsync(folderPath, descriptors, delimiter, "AllCarton", cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<CartonCsvFileArtifact>> WriteCartonDescriptorsAsync(
+        string folderPath,
+        IReadOnlyList<CartonCsvDescriptor> descriptors,
+        string delimiter,
+        string contextLabel,
+        CancellationToken cancellationToken)
+    {
         var writtenByFileName = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var artifacts = new List<CartonCsvFileArtifact>();
+        var artifacts = new List<CartonCsvFileArtifact>(descriptors.Count);
 
-        foreach (var formatter in CartonFormatters.Values.OrderBy(f => f.Kind))
+        foreach (var descriptor in descriptors)
         {
-            var descriptors = formatter.BuildDocuments(snapshot, safeQuery, fileOptions);
-            foreach (var descriptor in descriptors)
+            if (!writtenByFileName.Add(descriptor.FileName))
             {
-                if (!writtenByFileName.Add(descriptor.FileName))
-                {
-                    continue;
-                }
-
-                var filePath = Path.Combine(folderPath, descriptor.FileName);
-                var csvContent = CartonCsvFormattingHelpers.Serialize(descriptor, delimiter);
-                await WriteFileExclusivelyAsync(filePath, csvContent, cancellationToken);
-                _logger.LogInformation(
-                    "Carton synchronized CSV ({FileName} / {Role}) generated at {Path}",
-                    descriptor.FileName,
-                    descriptor.LogicalRole,
-                    filePath);
-
-                artifacts.Add(new CartonCsvFileArtifact(descriptor.LogicalRole, descriptor.FileName, filePath));
+                continue;
             }
+
+            var filePath = Path.Combine(folderPath, descriptor.FileName);
+            var csvContent = CartonCsvFormattingHelpers.Serialize(descriptor, delimiter);
+            await WriteFileExclusivelyAsync(filePath, csvContent, cancellationToken);
+            _logger.LogInformation(
+                "Carton CSV ({Context} / {Role}) generated at {Path}",
+                contextLabel,
+                descriptor.LogicalRole,
+                filePath);
+
+            artifacts.Add(new CartonCsvFileArtifact(descriptor.LogicalRole, descriptor.FileName, filePath));
         }
 
         return artifacts;

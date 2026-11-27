@@ -66,5 +66,33 @@ public sealed class SignalParityBaselineTests
 
         Assert.Equal("P\\CHANGE_PROJECT\\Especiales_ConPicto_2026\\\\\r\nP\\PROJECT_PARAMETER\\Par_Posicion_GrupoXY\\2\\\\\r\n", subirEsp);
     }
+
+    [Theory]
+    [InlineData(GraphicModule.Faldon, GraphicCommand.IdiomaCastellano, "itemset('<{BD}>CASTELLANO','EVENT_RUN');")]
+    [InlineData(GraphicModule.Faldon, GraphicCommand.IdiomaEuskera, "itemset('<{BD}>EUSKERA','EVENT_RUN');")]
+    [InlineData(GraphicModule.Faldon, GraphicCommand.IdiomaCatalan, "itemset('<{BD}>CATALAN','EVENT_RUN');")]
+    [InlineData(GraphicModule.Faldon, GraphicCommand.IdiomaGallego, "itemset('<{BD}>GALLEGO','EVENT_RUN');")]
+    [InlineData(GraphicModule.Carton, GraphicCommand.IdiomaCastellano, "itemset('<{BD}>CASTELLANO','EVENT_RUN');")]
+    [InlineData(GraphicModule.Carton, GraphicCommand.IdiomaEuskera, "itemset('<{BD}>EUSKERA','EVENT_RUN');")]
+    [InlineData(GraphicModule.Carton, GraphicCommand.IdiomaCatalan, "itemset('<{BD}>CATALAN','EVENT_RUN');")]
+    [InlineData(GraphicModule.Carton, GraphicCommand.IdiomaGallego, "itemset('<{BD}>GALLEGO','EVENT_RUN');")]
+    public void GraphicLanguageCommands_EmitExactUppercaseUnaccentedEventRunOnBothModules(
+        GraphicModule module,
+        GraphicCommand command,
+        string expectedSignal)
+    {
+        var composer = new DefaultSignalComposer();
+        var snapshot = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true);
+
+        var signal = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op1",
+            Module = module,
+            Command = command,
+            Oficiales = true
+        }, snapshot);
+
+        Assert.Equal(expectedSignal, signal);
+    }
 }
 

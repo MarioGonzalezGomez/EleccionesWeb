@@ -13,6 +13,7 @@ public sealed class OperationService : IOperationService
     private readonly IOperatorAuthorizationService _authorizationService;
     private readonly IOperationAuditService _auditService;
     private readonly IOperationStateService? _stateService;
+    private readonly ISignalDiagnosticsService? _diagnosticsService;
 
     public OperationService(
         IModuleLockService lockService,
@@ -22,7 +23,8 @@ public sealed class OperationService : IOperationService
         ISignalComposer signalComposer,
         IOperatorAuthorizationService authorizationService,
         IOperationAuditService auditService,
-        IOperationStateService? stateService = null)
+        IOperationStateService? stateService = null,
+        ISignalDiagnosticsService? diagnosticsService = null)
     {
         _lockService = lockService;
         _dataService = dataService;
@@ -32,6 +34,7 @@ public sealed class OperationService : IOperationService
         _authorizationService = authorizationService;
         _auditService = auditService;
         _stateService = stateService;
+        _diagnosticsService = diagnosticsService;
     }
 
     public async Task<OperationResult> ExecuteAsync(OperationRequest request, CancellationToken cancellationToken = default)
@@ -86,17 +89,21 @@ public sealed class OperationService : IOperationService
             return result;
         }
 
-        var queryError = ValidateQuery(request.Query);
-        if (!string.IsNullOrEmpty(queryError))
+        var isPureLanguageCommand = GraphicLanguageExtensions.TryFromCommand(request.Command, out _);
+        if (!isPureLanguageCommand)
         {
-            var result = new OperationResult
+            var queryError = ValidateQuery(request.Query);
+            if (!string.IsNullOrEmpty(queryError))
             {
-                Success = false,
-                Message = queryError
-            };
+                var result = new OperationResult
+                {
+                    Success = false,
+                    Message = queryError
+                };
 
-            await _auditService.RecordAsync(request, result, cancellationToken);
-            return result;
+                await _auditService.RecordAsync(request, result, cancellationToken);
+                return result;
+            }
         }
 
         if (!_lockService.IsOwner(request.Module, request.OperatorId))
@@ -111,51 +118,80 @@ public sealed class OperationService : IOperationService
             return result;
         }
 
-        var snapshot = await _dataService.GetSnapshotAsync(
-            request.Query,
-            request.Oficiales,
-            cancellationToken);
+        BrainStormSnapshot snapshot;
+        var csvPath = string.Empty;
+        IReadOnlyList<string> generatedCsvPaths = [];
 
-        string csvPath;
-        IReadOnlyList<string> generatedCsvPaths;
-
-        if (request.Module == GraphicModule.Carton)
+        if (isPureLanguageCommand)
         {
-            var allCartonArtifacts = await _csvWriter.WriteAllCartonFilesAsync(
-                snapshot,
-                request.Query,
-                cancellationToken,
-                request.Module);
-            csvPath = allCartonArtifacts.FirstOrDefault()?.FullPath ?? string.Empty;
-            generatedCsvPaths = allCartonArtifacts.Select(f => f.FullPath).ToList();
+            snapshot = new BrainStormSnapshot
+            {
+                Oficiales = request.Oficiales
+            };
         }
         else
         {
-            csvPath = await _csvWriter.WriteAsync(snapshot, request.ExportName, cancellationToken, request.Module);
-            generatedCsvPaths = string.IsNullOrWhiteSpace(csvPath) ? [] : [csvPath];
+            snapshot = await _dataService.GetSnapshotAsync(
+                request.Query,
+                request.Oficiales,
+                cancellationToken);
+
+            if (request.Module == GraphicModule.Carton)
+            {
+                var allCartonArtifacts = await _csvWriter.WriteAllCartonFilesAsync(
+                    snapshot,
+                    request.Query,
+                    cancellationToken,
+                    request.Module);
+                csvPath = allCartonArtifacts.FirstOrDefault()?.FullPath ?? string.Empty;
+                generatedCsvPaths = allCartonArtifacts.Select(f => f.FullPath).ToList();
+            }
+            else
+            {
+                csvPath = await _csvWriter.WriteAsync(snapshot, request.ExportName, cancellationToken, request.Module);
+                generatedCsvPaths = string.IsNullOrWhiteSpace(csvPath) ? [] : [csvPath];
+                await _csvWriter.WriteRecuentosJsonAsync(snapshot, cancellationToken, request.Module);
+            }
+
+            await WriteSedesCsvIfNeededAsync(request, snapshot, cancellationToken);
         }
 
-        await _csvWriter.WriteRecuentosJsonAsync(snapshot, cancellationToken, request.Module);
-        await WriteSedesCsvIfNeededAsync(request, snapshot, cancellationToken);
-
         var signal = _signalComposer.Compose(request, snapshot);
-        var dispatchedTargets = await _graphicsGateway.SendAsync(request.Target, signal, cancellationToken, request.Module);
+        var beforeSendUtc = DateTime.UtcNow.AddMilliseconds(-5);
+        var dispatchedTargets = string.IsNullOrWhiteSpace(signal)
+            ? []
+            : await _graphicsGateway.SendAsync(request.Target, signal, cancellationToken, request.Module);
 
         _lockService.MarkAction(request.Module, request.OperatorId, request.Action, request.Scene);
         _stateService?.RecordExecution(request, snapshot);
 
-        var successResult = new OperationResult
+        var recentEntries = _diagnosticsService?
+            .GetRecentEntries(request.Module, maxCount: 4)
+            .Where(e => e.TimestampUtc >= beforeSendUtc)
+            .ToList() ?? [];
+
+        var recentAttempt = dispatchedTargets.Count > 0
+            ? recentEntries.FirstOrDefault(e => e.Delivered)
+            : (recentEntries.FirstOrDefault(e => e.StatusMessage.StartsWith("Error TCP", StringComparison.OrdinalIgnoreCase))
+               ?? recentEntries.FirstOrDefault());
+
+        var hasTcpError = !string.IsNullOrWhiteSpace(signal)
+            && dispatchedTargets.Count == 0
+            && recentAttempt is not null
+            && recentAttempt.StatusMessage.StartsWith("Error TCP", StringComparison.OrdinalIgnoreCase);
+
+        var operationResult = new OperationResult
         {
-            Success = true,
-            Message = BuildResultMessage(dispatchedTargets, generatedCsvPaths),
+            Success = !hasTcpError,
+            Message = BuildResultMessage(signal, dispatchedTargets, generatedCsvPaths, recentAttempt),
             CsvPath = csvPath,
             GeneratedCsvPaths = generatedCsvPaths,
             Signal = signal,
             DispatchedTargets = dispatchedTargets
         };
 
-        await _auditService.RecordAsync(request, successResult, cancellationToken);
-        return successResult;
+        await _auditService.RecordAsync(request, operationResult, cancellationToken);
+        return operationResult;
     }
 
     private async Task WriteSedesCsvIfNeededAsync(
@@ -176,15 +212,39 @@ public sealed class OperationService : IOperationService
         await _csvWriter.WriteSedesAsync(snapshot, request.CommandValue, cancellationToken, request.Module);
     }
 
-    private static string BuildResultMessage(IReadOnlyList<string> dispatchedTargets, IReadOnlyList<string> generatedCsvPaths)
+    private static string BuildResultMessage(
+        string signal,
+        IReadOnlyList<string> dispatchedTargets,
+        IReadOnlyList<string> generatedCsvPaths,
+        SignalDiagnosticEntry? recentAttempt)
     {
         var filesLabel = generatedCsvPaths.Count > 0
             ? $" CSV: {string.Join(", ", generatedCsvPaths.Select(Path.GetFileName))}."
             : string.Empty;
 
+        if (string.IsNullOrWhiteSpace(signal))
+        {
+            return $"Estado operativo actualizado.{filesLabel}";
+        }
+
         if (dispatchedTargets.Count == 0)
         {
+            if (recentAttempt is not null && recentAttempt.StatusMessage.StartsWith("Error TCP", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"No se pudo conectar con {recentAttempt.EndpointName} ({recentAttempt.Host}:{recentAttempt.Port}): {recentAttempt.StatusMessage}.{filesLabel}";
+            }
+
+            if (recentAttempt is not null)
+            {
+                return $"Acción ejecutada ({recentAttempt.EndpointName} {recentAttempt.Host}:{recentAttempt.Port} desactivado en Configuración Técnica).{filesLabel}";
+            }
+
             return $"Acción ejecutada (sin destinos gráficos activos).{filesLabel}";
+        }
+
+        if (recentAttempt is { Delivered: true })
+        {
+            return $"Acción enviada a {string.Join(", ", dispatchedTargets)} ({recentAttempt.Host}:{recentAttempt.Port} · {recentAttempt.Bd}).{filesLabel}";
         }
 
         return $"Acción enviada a: {string.Join(", ", dispatchedTargets)}.{filesLabel}";

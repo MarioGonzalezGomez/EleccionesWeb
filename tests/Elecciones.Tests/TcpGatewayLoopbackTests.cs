@@ -100,6 +100,60 @@ public sealed class TcpGatewayLoopbackTests
         Assert.Equal("itemset('<DBS_DRY>TICKER/ENTRA','EVENT_RUN');", entries[0].Payload);
     }
 
+    [Fact]
+    public async Task SendAsync_WithIndependentFaldonAndCartonBrainstormEndpoints_RoutesEachModuleToItsOwnServer()
+    {
+        using var faldonServer = new TcpListener(IPAddress.Loopback, 0);
+        using var cartonServer = new TcpListener(IPAddress.Loopback, 0);
+        faldonServer.Start();
+        cartonServer.Start();
+
+        var faldonPort = ((IPEndPoint)faldonServer.LocalEndpoint).Port;
+        var cartonPort = ((IPEndPoint)cartonServer.LocalEndpoint).Port;
+
+        var options = new GraphicsEndpointsOptions();
+        options.SetModuleIpf(GraphicModule.Faldon, new GraphicsEndpointOptions
+        {
+            Enabled = true,
+            Host = "127.0.0.1",
+            Port = faldonPort,
+            Bd = "DBS_FALDON"
+        });
+        options.SetModuleIpf(GraphicModule.Carton, new GraphicsEndpointOptions
+        {
+            Enabled = true,
+            Host = "127.0.0.1",
+            Port = cartonPort,
+            Bd = "DBS_CARTON"
+        });
+
+        var diagnostics = new InMemorySignalDiagnosticsService();
+        var gateway = new TcpGraphicsGateway(
+            new StaticOptionsMonitor<GraphicsEndpointsOptions>(options),
+            NullLogger<TcpGraphicsGateway>.Instance,
+            diagnostics);
+
+        var faldonReceiveTask = ReceiveSingleMessageAsync(faldonServer);
+        var cartonReceiveTask = ReceiveSingleMessageAsync(cartonServer);
+
+        var sentFaldon = await gateway.SendAsync(
+            GraphicsTarget.Ipf,
+            "itemset('<{BD}>Escrutinio/Entra','EVENT_RUN');",
+            CancellationToken.None,
+            GraphicModule.Faldon);
+
+        var sentCarton = await gateway.SendAsync(
+            GraphicsTarget.Ipf,
+            "itemset('<{BD}>PARTICIPACION/ENTRA','EVENT_RUN');",
+            CancellationToken.None,
+            GraphicModule.Carton);
+
+        Assert.Contains("IPF", sentFaldon);
+        Assert.Contains("IPF", sentCarton);
+        Assert.Equal("itemset('<DBS_FALDON>Escrutinio/Entra','EVENT_RUN');", await faldonReceiveTask);
+        Assert.Equal("itemset('<DBS_CARTON>PARTICIPACION/ENTRA','EVENT_RUN');", await cartonReceiveTask);
+    }
+
     private static async Task<string> ReceiveSingleMessageAsync(TcpListener listener)
     {
         using var client = await listener.AcceptTcpClientAsync();

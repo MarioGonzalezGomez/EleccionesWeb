@@ -5,8 +5,7 @@ public enum CartonKind
     Participacion = 1,
     Mayorias = 2,
     Estatal = 3,
-    Cuadraditos = 4,
-    UltimoEscano = 5
+    UltimoEscano = 4
 }
 
 public sealed record CartonCsvFileArtifact(
@@ -45,21 +44,19 @@ public static class CartonKindResolver
         return scene.Trim().ToUpperInvariant() switch
         {
             "PARTICIPACION" => CartonKind.Participacion,
-            "MAYORIAS" or "CCAA_CARTONES" => CartonKind.Mayorias,
-            "ESTATAL" or "CARTON_PARTIDOS" => CartonKind.Estatal,
-            "CUADRADITOS" or "CARRUSEL" => CartonKind.Cuadraditos,
+            "MAYORIAS" or "SONDEO_MAYORIAS" or "CCAA_CARTONES" => CartonKind.Mayorias,
+            "ESTATAL" or "SONDEO_ESTATAL" or "CARTON_PARTIDOS" => CartonKind.Estatal,
             "ULTIMO_ESCANO" or "ULTIMOESCANO" => CartonKind.UltimoEscano,
             _ => CartonKind.Participacion
         };
     }
 
-    public static string ToDefaultSceneName(CartonKind kind) => kind switch
+    public static string ToDefaultSceneName(CartonKind kind, bool oficiales = true) => kind switch
     {
         CartonKind.Participacion => "PARTICIPACION",
-        CartonKind.Mayorias => "MAYORIAS",
-        CartonKind.Estatal => "ESTATAL",
-        CartonKind.Cuadraditos => "CUADRADITOS",
-        CartonKind.UltimoEscano => "ULTIMO_ESCANO",
+        CartonKind.Mayorias => oficiales ? "MAYORIAS" : "SONDEO_MAYORIAS",
+        CartonKind.Estatal => oficiales ? "ESTATAL" : "SONDEO_ESTATAL",
+        CartonKind.UltimoEscano => "ULTIMOESCANO",
         _ => "PARTICIPACION"
     };
 }

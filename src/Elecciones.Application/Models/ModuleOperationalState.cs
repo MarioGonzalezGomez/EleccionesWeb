@@ -10,6 +10,7 @@ public sealed record ModuleOperationalState
     public SnapshotQuery? PreviewQuery { get; init; }
     public int ElectionSlot { get; init; } = 1;
     public bool Oficiales { get; init; } = true;
+    public GraphicLanguage GraphicLanguage { get; init; } = GraphicLanguage.Castellano;
     public string ExportName { get; init; } = "BrainStorm";
     public GraphicsTarget Target { get; init; } = GraphicsTarget.Both;
     public string LastOperatorId { get; init; } = string.Empty;

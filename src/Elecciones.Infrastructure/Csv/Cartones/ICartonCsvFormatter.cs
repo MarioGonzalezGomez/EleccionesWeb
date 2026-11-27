@@ -1,15 +1,15 @@
 using System.Globalization;
 using System.Text;
 using Elecciones.Application.Models;
-using Elecciones.Infrastructure.Options;
 
 namespace Elecciones.Infrastructure.Csv.Cartones;
 
 public static class CartonCsvRoles
 {
-    public const string Unico = "Unico";
-    public const string Partidos = "Partidos";
-    public const string Provincia = "Provincia";
+    public const string DatosPartidos = "DatosPartidos";
+    public const string MayoriasProvincias = "MayoriasProvincias";
+    public const string DatosSondeo = "DatosSondeo";
+    public const string SondeoProvincias = "SondeoProvincias";
 }
 
 public sealed record CartonCsvDescriptor(
@@ -18,16 +18,6 @@ public sealed record CartonCsvDescriptor(
     IReadOnlyList<string> Headers,
     IReadOnlyList<IReadOnlyList<string>> Rows
 );
-
-public interface ICartonCsvFormatter
-{
-    CartonKind Kind { get; }
-
-    IReadOnlyList<CartonCsvDescriptor> BuildDocuments(
-        BrainStormSnapshot snapshot,
-        SnapshotQuery query,
-        CartonCsvFilesOptions fileOptions);
-}
 
 internal static class CartonCsvFormattingHelpers
 {
@@ -38,7 +28,7 @@ internal static class CartonCsvFormattingHelpers
 
         if (descriptor.Headers.Count > 0)
         {
-            sb.AppendLine(string.Join(sep, descriptor.Headers.Select( cell => EscapeCell(cell, sep))));
+            sb.AppendLine(string.Join(sep, descriptor.Headers.Select(cell => EscapeCell(cell, sep))));
         }
 
         foreach (var row in descriptor.Rows)
@@ -78,37 +68,6 @@ internal static class CartonCsvFormattingHelpers
 
     public static int ResolveDisplaySeats(PartidoSnapshot partido, bool oficiales)
         => oficiales ? partido.Escanios : partido.EscaniosHastaSondeo;
-
-    public static (int AbsoluteDiff, int SignedDiff, string Trend) ComputeSeatDelta(PartidoSnapshot partido, bool oficiales)
-    {
-        var current = ResolveDisplaySeats(partido, oficiales);
-        if (partido.EscaniosHistoricos == 0)
-        {
-            return (current, current, "*");
-        }
-
-        var signed = current - partido.EscaniosHistoricos;
-        var trend = signed > 0 ? "+" : signed < 0 ? "-" : "=";
-        return (Math.Abs(signed), signed, trend);
-    }
-
-    public static (int AbsoluteDiff, int SignedDiff, string Trend) ComputeVoteDelta(PartidoSnapshot partido)
-    {
-        if (partido.VotantesHistoricos == 0)
-        {
-            return (partido.Votos, partido.Votos, "*");
-        }
-
-        var signed = partido.Votos - partido.VotantesHistoricos;
-        var trend = signed > 0 ? "+" : signed < 0 ? "-" : "=";
-        return (Math.Abs(signed), signed, trend);
-    }
-
-    public static string FormatDecimal(double value, int decimals = 2)
-        => value.ToString($"F{decimals}", CultureInfo.InvariantCulture);
-
-    public static string FormatTruncatedTenths(double value)
-        => (Math.Truncate(value * 10d) / 10d).ToString(CultureInfo.InvariantCulture);
 
     public static string FormatInt(int value)
         => value.ToString(CultureInfo.InvariantCulture);

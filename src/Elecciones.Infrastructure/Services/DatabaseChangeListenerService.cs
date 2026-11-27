@@ -98,11 +98,10 @@ public sealed class DatabaseChangeListenerService
                 {
                     _lastHashes[state.Module] = (contextKey, hash);
 
-                    // Si hay operador de Cartones activo en un contexto nuevo, garantizamos ficheros iniciales sincronizados
+                    // Si hay operador de Cartones activo en un contexto nuevo, garantizamos los 4 ficheros CSV iniciales sincronizados
                     if (state.Module == GraphicModule.Carton && isCartonOperatorActive && !state.IsOnAir)
                     {
                         await _csvWriter.WriteAllCartonFilesAsync(snapshot, query, cancellationToken, state.Module);
-                        await _csvWriter.WriteRecuentosJsonAsync(snapshot, cancellationToken, state.Module);
                     }
 
                     continue;
@@ -130,9 +129,8 @@ public sealed class DatabaseChangeListenerService
                 else
                 {
                     await _csvWriter.WriteAsync(snapshot, exportName, cancellationToken, state.Module);
+                    await _csvWriter.WriteRecuentosJsonAsync(snapshot, cancellationToken, state.Module);
                 }
-
-                await _csvWriter.WriteRecuentosJsonAsync(snapshot, cancellationToken, state.Module);
 
                 if (!state.IsOnAir)
                 {
@@ -236,6 +234,10 @@ public sealed class DatabaseChangeListenerService
             snapshot.Avance2,
             snapshot.Avance3,
             snapshot.Participacion,
+            snapshot.ParticipacionHistorica,
+            snapshot.ParticipacionMedia,
+            snapshot.VotantesFaltan,
+            PartidosEleccion = snapshot.PartidosEleccion.Select(p => new { p.Codigo, p.Siglas }),
             Partidos = sourceParties.Select(p => new
             {
                 p.Codigo,
@@ -253,7 +255,15 @@ public sealed class DatabaseChangeListenerService
                 m.CodigoLugar,
                 m.CodigoPartidoGanador,
                 m.EscaniosCircunscripcion,
-                m.Escrutado
+                m.Escrutado,
+                m.DiferenciaEscaniosGanador
+            }),
+            SondeoMayorias = snapshot.SondeoMayoriasCircunscripciones.Select(m => new
+            {
+                m.CodigoLugar,
+                m.CodigoPartidoGanador,
+                m.EscaniosCircunscripcion,
+                m.DiferenciaEscaniosGanador
             })
         });
 

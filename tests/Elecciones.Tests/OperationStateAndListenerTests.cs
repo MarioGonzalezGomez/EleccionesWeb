@@ -170,7 +170,8 @@ public sealed class OperationStateAndListenerTests
         {
             OperatorId = "op_carton",
             Module = GraphicModule.Carton,
-            Scene = "CARTON_PARTIDOS",
+            CartonKind = CartonKind.Estatal,
+            Scene = "ESTATAL",
             Action = OperationActionType.Enter,
             Oficiales = true,
             ExportName = "BrainStorm_Carton",
@@ -199,7 +200,7 @@ public sealed class OperationStateAndListenerTests
 
         Assert.Equal(1, updatedCount);
         Assert.Single(fakeGateway.SentSignals);
-        Assert.Contains("META/MODE','OFICIAL'", fakeGateway.SentSignals[0]);
+        Assert.Equal("itemset('<{BD}>ACTUALIZAR','EVENT_RUN');", fakeGateway.SentSignals[0]);
     }
 
     [Fact]
@@ -268,13 +269,14 @@ public sealed class OperationStateAndListenerTests
         // 1er poll tras cambio de escena a ESTATAL en aire fija hash base de ese contexto
         Assert.Equal(0, await listener.CheckAndDispatchUpdatesOnceAsync());
 
-        // Nuevo cambio en BD con Cartón EN AIRE: actualiza todos los CSV Y envía señal al IPF
+        // Nuevo cambio en BD con Cartón EN AIRE: actualiza todos los CSV Y envía señal ACTUALIZAR al IPF (sin escribir JSON)
         fakeData.CurrentSnapshot = fakeData.CurrentSnapshot with { Escrutado = 94.80 };
         var onAirSignals = await listener.CheckAndDispatchUpdatesOnceAsync();
         Assert.Equal(1, onAirSignals);
         Assert.Equal(3, fakeCsv.AllCartonSyncCalls);
+        Assert.Equal(0, fakeCsv.RecuentosJsonCalls);
         Assert.Single(fakeGateway.SentSignals);
-        Assert.Contains("ESTATAL/ACTUALIZA", fakeGateway.SentSignals[0]);
+        Assert.Equal("itemset('<{BD}>ACTUALIZAR','EVENT_RUN');", fakeGateway.SentSignals[0]);
 
         // Si mientras está EN AIRE (9900000) el operador previsualiza otra circunscripción (2800000) sin pulsar ENTRA/ACTUALIZA,
         // un nuevo cambio en BD mantiene la query de emisión (9900000) sin mutar a 2800000.
@@ -348,6 +350,7 @@ public sealed class OperationStateAndListenerTests
     {
         public List<CartonKind> WrittenCartonKinds { get; } = [];
         public int AllCartonSyncCalls { get; private set; }
+        public int RecuentosJsonCalls { get; private set; }
 
         public Task<string> WriteAsync(BrainStormSnapshot snapshot, string fileNameWithoutExtension, CancellationToken ct = default, GraphicModule? module = null)
             => Task.FromResult($"{fileNameWithoutExtension}.csv");
@@ -383,7 +386,13 @@ public sealed class OperationStateAndListenerTests
             => Task.FromResult<string?>("Sedes.csv");
 
         public Task<string?> WriteRecuentosJsonAsync(BrainStormSnapshot snapshot, CancellationToken ct = default, GraphicModule? module = null)
-            => Task.FromResult<string?>("Recuentos.json");
+        {
+            if (module == GraphicModule.Carton)
+            {
+                RecuentosJsonCalls++;
+            }
+            return Task.FromResult<string?>("Recuentos.json");
+        }
     }
 
     private sealed class FakeGraphicsGateway : IGraphicsGateway

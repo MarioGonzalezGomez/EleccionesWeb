@@ -15,6 +15,13 @@ $clientOutput = Join-Path $artifactsRoot "client"
 $serverProject = Join-Path $repoRoot "src\Elecciones.Web\Elecciones.Web.csproj"
 $clientProject = Join-Path $repoRoot "tools\WebClientLauncher\WebClientLauncher.csproj"
 
+$existingServerSettings = $null
+$serverSettingsPath = Join-Path $serverOutput "appsettings.json"
+if (Test-Path $serverSettingsPath)
+{
+    $existingServerSettings = Get-Content -LiteralPath $serverSettingsPath -Raw -Encoding UTF8
+}
+
 if (Test-Path $artifactsRoot)
 {
     Remove-Item -LiteralPath $artifactsRoot -Recurse -Force
@@ -38,6 +45,12 @@ dotnet publish $serverProject `
 if ($LASTEXITCODE -ne 0)
 {
     throw "Fallo la publicacion del servidor."
+}
+
+if ($null -ne $existingServerSettings)
+{
+    Set-Content -LiteralPath $serverSettingsPath -Value $existingServerSettings -Encoding UTF8
+    Write-Host "Preservado appsettings.json previo en $serverSettingsPath"
 }
 
 Write-Host "Publicando lanzador cliente (WebClientLauncher)..."

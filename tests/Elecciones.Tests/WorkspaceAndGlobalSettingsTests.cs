@@ -1,6 +1,7 @@
 using Elecciones.Application.Abstractions;
 using Elecciones.Application.Models;
 using Elecciones.Application.Services;
+using Elecciones.Infrastructure.Options;
 using Xunit;
 
 namespace Elecciones.Tests;
@@ -93,6 +94,67 @@ public sealed class WorkspaceAndGlobalSettingsTests
         Assert.True(lockService.ForceRelease(GraphicModule.Faldon));
         Assert.True(notified);
         Assert.True(lockService.TryAcquire(GraphicModule.Faldon, "other_op"));
+    }
+
+    [Fact]
+    public void DatabaseOptions_GetActiveElections_ClampsOneToThreeAndMapsLabelsAndDatabases()
+    {
+        var opts = new DatabaseOptions
+        {
+            NumEleccionesSimultaneas = 2,
+            Label1 = "Congreso",
+            Name = "generales_2026_congreso",
+            Label2 = "Senado",
+            Name2 = "generales_2026_senado",
+            Label3 = "Municipales",
+            Name3 = "municipales_2026"
+        };
+
+        var active = opts.GetActiveElections();
+        Assert.Equal(2, active.Count);
+        Assert.Equal("Congreso", active[0].Label);
+        Assert.Equal("generales_2026_congreso", active[0].DatabaseName);
+        Assert.Equal("Senado", active[1].Label);
+        Assert.Equal("generales_2026_senado", active[1].DatabaseName);
+
+        Assert.Equal(2, opts.ClampSlot(3));
+        Assert.Equal(1, opts.ClampSlot(0));
+    }
+
+    [Fact]
+    public void CircunscripcionTreeBuilder_BuildsGeneralCommunityProvinceAndCityHierarchy()
+    {
+        var flat = new List<CircunscripcionSummary>
+        {
+            new("0141091", "Sevilla Capital"),
+            new("0141000", "Sevilla"),
+            new("0104000", "Almería"),
+            new("0100000", "Andalucía"),
+            new("1200000", "Madrid"),
+            new("1228079", "Madrid Capital"),
+            new("9900000", "España")
+        };
+
+        var tree = CircunscripcionTreeBuilder.Build(flat);
+
+        Assert.Equal(3, tree.Count);
+        Assert.Equal("9900000", tree[0].Codigo);
+        Assert.False(tree[0].HasChildren);
+
+        var andalucia = tree.Single(n => n.Codigo == "0100000");
+        Assert.Equal(2, andalucia.Children.Count);
+        Assert.Equal("0104000", andalucia.Children[0].Codigo);
+        Assert.Equal("0141000", andalucia.Children[1].Codigo);
+        Assert.Single(andalucia.Children[1].Children);
+        Assert.Equal("0141091", andalucia.Children[1].Children[0].Codigo);
+
+        // Comunidad uniprovincial con municipio directo sin fila intermedia 1228000
+        var madrid = tree.Single(n => n.Codigo == "1200000");
+        Assert.Single(madrid.Children);
+        Assert.Equal("1228079", madrid.Children[0].Codigo);
+
+        var ancestors = CircunscripcionTreeBuilder.FindAncestorCodes(tree, "0141091");
+        Assert.Equal(new[] { "0100000", "0141000" }, ancestors);
     }
 
     private sealed class FakeModuleLockStateStore : IModuleLockStateStore
