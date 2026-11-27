@@ -58,6 +58,22 @@ public sealed class OperationStateAndListenerTests
     }
 
     [Fact]
+    public void ValencianoLanguageCommand_UpdatesTheModuleLanguageState()
+    {
+        var stateService = new OperationStateService();
+
+        stateService.RecordExecution(new OperationRequest
+        {
+            OperatorId = "op-faldon",
+            Module = GraphicModule.Faldon,
+            Command = GraphicCommand.IdiomaValenciano,
+            Oficiales = true
+        }, TestSnapshotFactory.CreateSampleSnapshot(oficiales: true));
+
+        Assert.Equal(GraphicLanguage.Valenciano, stateService.GetState(GraphicModule.Faldon).GraphicLanguage);
+    }
+
+    [Fact]
     public async Task DatabaseChangeListenerService_DetectsDataChangeAndDispatchesAutoUpdateWhenOnAir()
     {
         var stateService = new OperationStateService();

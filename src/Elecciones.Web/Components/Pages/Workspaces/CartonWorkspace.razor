@@ -112,6 +112,12 @@
                         <option @key="@($"{moduleElectionSlot}_{medio.Codigo}")" value="@medio.Codigo">@medio.Descripcion</option>
                     }
                 </select>
+                <button type="button"
+                        class="ws-btn ws-btn-primary-outline ws-btn-xs"
+                        title="Actualizar la lista de medios desde la base de datos"
+                        @onclick="ReloadReferenceDataAsync">
+                    Actualizar
+                </button>
             </div>
         }
 
@@ -330,7 +336,7 @@
                        ShowUltimoIndicators="@(activeKind == CartonKind.UltimoEscano)"
                        Loading="@loadingParties"
                        OnPartySelected="OnPartySelected"
-                       OnRefreshClicked="LoadPartiesAsync" />
+                       OnRefreshClicked="() => LoadPartiesAsync()" />
 </div>
 
 @code {
@@ -631,7 +637,7 @@
         }
     }
 
-    private async Task LoadPartiesAsync()
+    private async Task LoadPartiesAsync(bool syncSelectionAndFiles = true)
     {
         loadingParties = true;
         try
@@ -651,7 +657,10 @@
                 selectedPartyCode = DisplayedParties.FirstOrDefault()?.Codigo ?? string.Empty;
             }
 
-            await SyncCartonSelectionAndFilesAsync(snapshot);
+            if (syncSelectionAndFiles)
+            {
+                await SyncCartonSelectionAndFilesAsync(snapshot);
+            }
         }
         catch (Exception ex)
         {
@@ -769,6 +778,7 @@
             var connChanged = updated.ConnectionType != globalSettings.ConnectionType;
             var queryFilterChanged = updated.IncludeZeroSeats != globalSettings.IncludeZeroSeats
                                      || updated.Avance != globalSettings.Avance;
+            var autoRefreshApplied = updated.LastAutoRefreshAppliedUtc != globalSettings.LastAutoRefreshAppliedUtc;
             globalSettings = updated;
 
             if (connChanged)
@@ -776,9 +786,9 @@
                 await ReloadReferenceDataAsync();
             }
 
-            if (connChanged || queryFilterChanged)
+            if (connChanged || queryFilterChanged || autoRefreshApplied)
             {
-                await LoadPartiesAsync();
+                await LoadPartiesAsync(syncSelectionAndFiles: !autoRefreshApplied || connChanged || queryFilterChanged);
             }
 
             StateHasChanged();

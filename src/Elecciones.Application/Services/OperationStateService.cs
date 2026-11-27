@@ -309,6 +309,7 @@ public sealed class OperationStateService : IOperationStateService
             case GraphicCommand.IdiomaEuskera:
             case GraphicCommand.IdiomaCatalan:
             case GraphicCommand.IdiomaGallego:
+            case GraphicCommand.IdiomaValenciano:
                 if (GraphicLanguageExtensions.TryFromCommand(request.Command, out var lang))
                 {
                     state.GraphicLanguage = lang;

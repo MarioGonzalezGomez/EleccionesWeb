@@ -59,5 +59,6 @@ public enum GraphicCommand
     IdiomaCastellano = 80,
     IdiomaEuskera = 81,
     IdiomaCatalan = 82,
-    IdiomaGallego = 83
+    IdiomaGallego = 83,
+    IdiomaValenciano = 84
 }

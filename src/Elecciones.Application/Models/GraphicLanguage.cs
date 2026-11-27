@@ -5,7 +5,8 @@ public enum GraphicLanguage
     Castellano = 0,
     Euskera = 1,
     Catalan = 2,
-    Gallego = 3
+    Gallego = 3,
+    Valenciano = 4
 }
 
 public static class GraphicLanguageExtensions
@@ -16,6 +17,7 @@ public static class GraphicLanguageExtensions
         GraphicLanguage.Euskera => "Euskera",
         GraphicLanguage.Catalan => "Catalán",
         GraphicLanguage.Gallego => "Gallego",
+        GraphicLanguage.Valenciano => "Valenciano",
         _ => "Castellano"
     };
 
@@ -25,6 +27,7 @@ public static class GraphicLanguageExtensions
         GraphicLanguage.Euskera => "EUSKERA",
         GraphicLanguage.Catalan => "CATALAN",
         GraphicLanguage.Gallego => "GALLEGO",
+        GraphicLanguage.Valenciano => "VALENCIANO",
         _ => "CASTELLANO"
     };
 
@@ -34,6 +37,7 @@ public static class GraphicLanguageExtensions
         GraphicLanguage.Euskera => GraphicCommand.IdiomaEuskera,
         GraphicLanguage.Catalan => GraphicCommand.IdiomaCatalan,
         GraphicLanguage.Gallego => GraphicCommand.IdiomaGallego,
+        GraphicLanguage.Valenciano => GraphicCommand.IdiomaValenciano,
         _ => GraphicCommand.IdiomaCastellano
     };
 
@@ -52,6 +56,9 @@ public static class GraphicLanguageExtensions
                 return true;
             case GraphicCommand.IdiomaGallego:
                 language = GraphicLanguage.Gallego;
+                return true;
+            case GraphicCommand.IdiomaValenciano:
+                language = GraphicLanguage.Valenciano;
                 return true;
             default:
                 language = GraphicLanguage.Castellano;

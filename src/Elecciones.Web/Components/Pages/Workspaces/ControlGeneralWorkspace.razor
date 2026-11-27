@@ -1252,9 +1252,16 @@
 
     private void HandleGlobalSettingsChanged(GlobalOperationalSettings settings)
     {
-        _ = InvokeAsync(() =>
+        _ = InvokeAsync(async () =>
         {
+            var autoRefreshApplied = settings.LastAutoRefreshAppliedUtc != globalSnapshot.LastAutoRefreshAppliedUtc;
             globalSnapshot = settings;
+
+            if (autoRefreshApplied)
+            {
+                await RefreshEscrutadoBySlotAsync();
+            }
+
             StateHasChanged();
         });
     }

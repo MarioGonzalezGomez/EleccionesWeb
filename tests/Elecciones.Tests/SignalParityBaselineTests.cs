@@ -72,10 +72,12 @@ public sealed class SignalParityBaselineTests
     [InlineData(GraphicModule.Faldon, GraphicCommand.IdiomaEuskera, "itemset('<{BD}>EUSKERA','EVENT_RUN');")]
     [InlineData(GraphicModule.Faldon, GraphicCommand.IdiomaCatalan, "itemset('<{BD}>CATALAN','EVENT_RUN');")]
     [InlineData(GraphicModule.Faldon, GraphicCommand.IdiomaGallego, "itemset('<{BD}>GALLEGO','EVENT_RUN');")]
+    [InlineData(GraphicModule.Faldon, GraphicCommand.IdiomaValenciano, "itemset('<{BD}>VALENCIANO','EVENT_RUN');")]
     [InlineData(GraphicModule.Carton, GraphicCommand.IdiomaCastellano, "itemset('<{BD}>CASTELLANO','EVENT_RUN');")]
     [InlineData(GraphicModule.Carton, GraphicCommand.IdiomaEuskera, "itemset('<{BD}>EUSKERA','EVENT_RUN');")]
     [InlineData(GraphicModule.Carton, GraphicCommand.IdiomaCatalan, "itemset('<{BD}>CATALAN','EVENT_RUN');")]
     [InlineData(GraphicModule.Carton, GraphicCommand.IdiomaGallego, "itemset('<{BD}>GALLEGO','EVENT_RUN');")]
+    [InlineData(GraphicModule.Carton, GraphicCommand.IdiomaValenciano, "itemset('<{BD}>VALENCIANO','EVENT_RUN');")]
     public void GraphicLanguageCommands_EmitExactUppercaseUnaccentedEventRunOnBothModules(
         GraphicModule module,
         GraphicCommand command,
