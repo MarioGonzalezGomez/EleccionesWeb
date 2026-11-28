@@ -69,6 +69,11 @@
         <table class="ws-table ws-party-table">
             <thead>
                 <tr>
+                    @if (PactometerSelectionEnabled)
+                    {
+                        <th class="text-center">Izquierda</th>
+                        <th class="text-center">Derecha</th>
+                    }
                     <th class="ws-col-code">Código</th>
                     <th>Partido</th>
                     <th class="text-end ws-col-seats">@(Oficiales ? "Escaños" : "Escaños (Sondeo)")</th>
@@ -81,7 +86,7 @@
                 @if (FilteredParties.Count == 0)
                 {
                     <tr>
-                        <td colspan="6" class="text-center text-muted py-4">
+                        <td colspan="@(PactometerSelectionEnabled ? 8 : 6)" class="text-center text-muted py-4">
                             @(Parties.Count == 0 ? "Sin datos de partidos disponibles para la selección actual." : "Sin coincidencias para el filtro aplicado.")
                         </td>
                     </tr>
@@ -98,6 +103,21 @@
                         <tr class="ws-party-row @(isSelected ? "selected" : null)"
                             @onclick="() => OnPartySelected.InvokeAsync(party)"
                             @ondblclick="() => OnPartyDoubleClicked.InvokeAsync(party)">
+                            @if (PactometerSelectionEnabled)
+                            {
+                                <td class="text-center" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                                    <input type="checkbox"
+                                           aria-label="@($"Seleccionar {party.Siglas} para el bloque izquierdo")"
+                                           checked="@LeftSelectedPartyCodes.Contains(party.Codigo, StringComparer.OrdinalIgnoreCase)"
+                                           @onchange="() => OnLeftPartySelectionChanged.InvokeAsync(party)" />
+                                </td>
+                                <td class="text-center" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                                    <input type="checkbox"
+                                           aria-label="@($"Seleccionar {party.Siglas} para el bloque derecho")"
+                                           checked="@RightSelectedPartyCodes.Contains(party.Codigo, StringComparer.OrdinalIgnoreCase)"
+                                           @onchange="() => OnRightPartySelectionChanged.InvokeAsync(party)" />
+                                </td>
+                            }
                             <td class="ws-mono text-muted ws-col-code">@party.Codigo</td>
                             <td>
                                 <div class="d-flex align-items-center gap-2 flex-wrap">
@@ -187,9 +207,14 @@
     [Parameter] public string SelectedPartyCode { get; set; } = string.Empty;
     [Parameter] public bool Oficiales { get; set; }
     [Parameter] public bool ShowUltimoIndicators { get; set; }
+    [Parameter] public bool PactometerSelectionEnabled { get; set; }
+    [Parameter] public IReadOnlyList<string> LeftSelectedPartyCodes { get; set; } = [];
+    [Parameter] public IReadOnlyList<string> RightSelectedPartyCodes { get; set; } = [];
     [Parameter] public bool Loading { get; set; }
     [Parameter] public EventCallback<PartidoSnapshot> OnPartySelected { get; set; }
     [Parameter] public EventCallback<PartidoSnapshot> OnPartyDoubleClicked { get; set; }
+    [Parameter] public EventCallback<PartidoSnapshot> OnLeftPartySelectionChanged { get; set; }
+    [Parameter] public EventCallback<PartidoSnapshot> OnRightPartySelectionChanged { get; set; }
     [Parameter] public EventCallback OnRefreshClicked { get; set; }
 
     private IReadOnlyList<PartidoSnapshot> FilteredParties => string.IsNullOrWhiteSpace(searchTerm)

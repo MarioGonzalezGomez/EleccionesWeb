@@ -25,6 +25,13 @@ public sealed record CircunscripcionMayoriaSnapshot(
     int DiferenciaEscaniosGanador = 0
 );
 
+public sealed record MapaEscanosSnapshot(
+    string CodigoLugar,
+    string CodigoPartido,
+    int Escanos,
+    string DisputaCon = ""
+);
+
 public sealed record VideoSlotSnapshot(
     int Slot,
     bool IsLive,

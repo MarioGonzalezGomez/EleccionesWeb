@@ -98,7 +98,7 @@ public sealed class DatabaseChangeListenerService
                 {
                     _lastHashes[state.Module] = (contextKey, hash);
 
-                    // Si hay operador de Cartones activo en un contexto nuevo, garantizamos los 4 ficheros CSV iniciales sincronizados
+                    // Si hay operador de Cartones activo en un contexto nuevo, garantizamos los 5 ficheros CSV iniciales sincronizados
                     if (state.Module == GraphicModule.Carton && isCartonOperatorActive && !state.IsOnAir)
                     {
                         await _csvWriter.WriteAllCartonFilesAsync(snapshot, query, cancellationToken, state.Module);

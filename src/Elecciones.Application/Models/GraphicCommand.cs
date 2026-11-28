@@ -31,6 +31,7 @@ public enum GraphicCommand
     PactosEntraDerecha = 34,
     PactosSaleIzquierda = 35,
     PactosSaleDerecha = 36,
+    PactosEntraAmbos = 37,
 
     UltimoLimpiaPartidos = 40,
     UltimoEntraPartidoIzquierda = 41,

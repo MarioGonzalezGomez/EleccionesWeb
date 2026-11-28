@@ -188,6 +188,10 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
 
         IReadOnlyList<CartonCsvDescriptor> descriptors = cartonKind switch
         {
+            CartonKind.Mapa =>
+            [
+                MapaEscanosCsvBuilder.Build(snapshot, CartonCsvRoles.MapaEscanos, fileOptions.MapaEscanosFileName)
+            ],
             CartonKind.Mayorias or CartonKind.Estatal when snapshot.Oficiales =>
             [
                 DatosPartidosCsvBuilder.Build(snapshot, CartonCsvRoles.DatosPartidos, fileOptions.DatosPartidosFileName),
@@ -223,7 +227,8 @@ public sealed class FileBrainStormCsvWriter : IBrainStormCsvWriter
             DatosPartidosCsvBuilder.Build(snapshot, CartonCsvRoles.DatosPartidos, fileOptions.DatosPartidosFileName),
             MayoriasProvinciasCsvBuilder.Build(snapshot, CartonCsvRoles.MayoriasProvincias, fileOptions.MayoriasProvinciasFileName),
             DatosSondeoCsvBuilder.Build(snapshot, CartonCsvRoles.DatosSondeo, fileOptions.DatosSondeoFileName),
-            SondeoProvinciasCsvBuilder.Build(snapshot, CartonCsvRoles.SondeoProvincias, fileOptions.SondeoProvinciasFileName)
+            SondeoProvinciasCsvBuilder.Build(snapshot, CartonCsvRoles.SondeoProvincias, fileOptions.SondeoProvinciasFileName),
+            MapaEscanosCsvBuilder.Build(snapshot, CartonCsvRoles.MapaEscanos, fileOptions.MapaEscanosFileName)
         ];
 
         return await WriteCartonDescriptorsAsync(folderPath, descriptors, delimiter, "AllCarton", cancellationToken);

@@ -134,7 +134,7 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             avance = query.Avance.Value;
         }
         var participacion = await ResolveParticipacionDataAsync(db, contextCirc, avance, query.ElectionSlot, cancellationToken);
-        var (todasLasProvincias, provinciasAutonomia, mayoriasCircunscripciones, sondeoMayoriasCircunscripciones, partidosEleccion) = await ResolveMapaYMayoriasAsync(
+        var (todasLasProvincias, provinciasAutonomia, mayoriasCircunscripciones, sondeoMayoriasCircunscripciones, mapaEscanos, partidosEleccion) = await ResolveMapaYMayoriasAsync(
             db,
             contextCirc,
             query.MedioCodigo,
@@ -182,6 +182,7 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             ProvinciasAutonomia = provinciasAutonomia,
             MayoriasCircunscripciones = mayoriasCircunscripciones,
             SondeoMayoriasCircunscripciones = sondeoMayoriasCircunscripciones,
+            MapaEscanos = mapaEscanos,
             TodasLasProvinciasMapa = todasLasProvincias,
             VideoSlots = operational.VideoSources
                 .Select(v => new VideoSlotSnapshot(v.Slot, v.IsLive, v.Path ?? string.Empty))
@@ -194,6 +195,7 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         IReadOnlyList<ProvinciaMapaSnapshot> ProvinciasAutonomia,
         IReadOnlyList<CircunscripcionMayoriaSnapshot> MayoriasCircunscripciones,
         IReadOnlyList<CircunscripcionMayoriaSnapshot> SondeoMayoriasCircunscripciones,
+        IReadOnlyList<MapaEscanosSnapshot> MapaEscanos,
         IReadOnlyList<PartidoEleccionSummary> PartidosEleccion)> ResolveMapaYMayoriasAsync(
         EleccionesDbContext db,
         CircunscripcionEntity contextCirc,
@@ -207,9 +209,7 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             .OrderBy(x => x.Codigo)
             .ToListAsync(cancellationToken);
 
-        var allProvincialCircs = allCircs
-            .Where(x => x.Codigo.EndsWith("000", StringComparison.Ordinal) && !x.Codigo.EndsWith("00000", StringComparison.Ordinal))
-            .ToList();
+        var allProvincialCircs = ResolveProvincialCircunscripciones(allCircs);
 
         var todasLasProvincias = allProvincialCircs
             .Select(x => x.Nombre.Trim())
@@ -229,6 +229,36 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
         var groupedByCirc = allCps
             .GroupBy(x => x.CodCircunscripcion, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var mapaEscanos = allProvincialCircs
+            .SelectMany(c =>
+            {
+                var partidosProvincia = groupedByCirc.GetValueOrDefault(c.Codigo) ?? [];
+                var ultimoEscano = partidosProvincia.FirstOrDefault(x => x.EsUltimoEscano != 0);
+                var partidoEnDisputa = partidosProvincia.FirstOrDefault(x => x.LuchaUltimoEscano != 0);
+                var disputaCon = ultimoEscano is not null && partidoEnDisputa is not null
+                    ? partidoEnDisputa.CodPartido.Trim()
+                    : string.Empty;
+
+                return partidosProvincia
+                    .Where(x => x.EscaniosHasta > 0
+                        && !string.IsNullOrWhiteSpace(x.CodPartido)
+                        && !string.Equals(DatosPartidosCsvBuilder.NormalizePartyCode(x.CodPartido), "99999", StringComparison.Ordinal))
+                    .Select(x => new MapaEscanosSnapshot(
+                        c.Codigo.Trim(),
+                        x.CodPartido.Trim(),
+                        x.EscaniosHasta,
+                        ultimoEscano is not null
+                            && string.Equals(
+                                DatosPartidosCsvBuilder.NormalizePartyCode(x.CodPartido),
+                                DatosPartidosCsvBuilder.NormalizePartyCode(ultimoEscano.CodPartido),
+                                StringComparison.Ordinal)
+                                ? disputaCon
+                                : string.Empty));
+            })
+            .OrderBy(x => x.CodigoLugar, StringComparer.Ordinal)
+            .ThenBy(x => x.CodigoPartido, StringComparer.Ordinal)
+            .ToList();
 
         var officialWinnerByCirc = groupedByCirc.ToDictionary(
             kvp => kvp.Key,
@@ -344,7 +374,36 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             .ThenBy(p => DatosPartidosCsvBuilder.NormalizePartyCode(p.Codigo), StringComparer.Ordinal)
             .ToList();
 
-        return (todasLasProvincias, provinciasAutonomia, mayoriasCircunscripciones, sondeoMayoriasCircunscripciones, partidosEleccion);
+        return (todasLasProvincias, provinciasAutonomia, mayoriasCircunscripciones, sondeoMayoriasCircunscripciones, mapaEscanos, partidosEleccion);
+    }
+
+    internal static List<CircunscripcionEntity> ResolveProvincialCircunscripciones(
+        IReadOnlyList<CircunscripcionEntity> allCircs)
+    {
+        var provincialCircs = allCircs
+            .Where(x => x.Codigo.EndsWith("000", StringComparison.Ordinal)
+                && !x.Codigo.EndsWith("00000", StringComparison.Ordinal))
+            .ToList();
+
+        var singleProvinceCommunities = allCircs
+            .Where(x => x.Codigo.EndsWith("00000", StringComparison.Ordinal)
+                && !string.Equals(x.Codigo, "9900000", StringComparison.Ordinal))
+            .Where(community =>
+            {
+                var prefix = !string.IsNullOrWhiteSpace(community.Comunidad)
+                    ? community.Comunidad.Trim()
+                    : community.Codigo[..Math.Min(2, community.Codigo.Length)];
+
+                return !provincialCircs.Any(province =>
+                    string.Equals(province.Comunidad, prefix, StringComparison.OrdinalIgnoreCase)
+                    || province.Codigo.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            });
+
+        return provincialCircs
+            .Concat(singleProvinceCommunities)
+            .DistinctBy(x => x.Codigo, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x.Codigo, StringComparer.Ordinal)
+            .ToList();
     }
 
     private static CircunscripcionPartidoEntity? ResolveValidMajorityWinner(

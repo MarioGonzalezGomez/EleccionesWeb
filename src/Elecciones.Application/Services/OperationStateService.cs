@@ -195,6 +195,12 @@ public sealed class OperationStateService : IOperationStateService
                         state.ActiveScene = string.Empty;
                         state.IsSedeExpanding = false;
                         state.ExpandedVideos.Clear();
+                        if (request.Module == GraphicModule.Faldon
+                            && string.Equals(scene, "Pactometro", StringComparison.OrdinalIgnoreCase))
+                        {
+                            state.PactosIzquierda.Clear();
+                            state.PactosDerecha.Clear();
+                        }
                         break;
                 }
             }
@@ -238,7 +244,7 @@ public sealed class OperationStateService : IOperationStateService
 
             case GraphicCommand.PactosEntra:
                 state.IsOnAir = true;
-                state.ActiveScene = "PACTOS";
+                state.ActiveScene = request.Module == GraphicModule.Faldon ? "Pactometro" : "PACTOS";
                 break;
 
             case GraphicCommand.PactosSale:
@@ -252,30 +258,35 @@ public sealed class OperationStateService : IOperationStateService
                 break;
 
             case GraphicCommand.PactosEntraIzquierda:
-                if (!string.IsNullOrWhiteSpace(request.CommandValue)
-                    && !state.PactosIzquierda.Contains(request.CommandValue.Trim(), StringComparer.OrdinalIgnoreCase))
-                {
-                    state.PactosIzquierda.Add(request.CommandValue.Trim());
-                }
+                UpdatePactosPartyList(state.PactosIzquierda, request);
                 break;
 
             case GraphicCommand.PactosEntraDerecha:
-                if (!string.IsNullOrWhiteSpace(request.CommandValue)
-                    && !state.PactosDerecha.Contains(request.CommandValue.Trim(), StringComparer.OrdinalIgnoreCase))
-                {
-                    state.PactosDerecha.Add(request.CommandValue.Trim());
-                }
+                UpdatePactosPartyList(state.PactosDerecha, request);
+                break;
+
+            case GraphicCommand.PactosEntraAmbos:
+                UpdatePactosPartyList(state.PactosIzquierda, request.LeftPartyCodes);
+                UpdatePactosPartyList(state.PactosDerecha, request.RightPartyCodes);
                 break;
 
             case GraphicCommand.PactosSaleIzquierda:
-                if (state.PactosIzquierda.Count > 0)
+                if (request.Module == GraphicModule.Faldon)
+                {
+                    state.PactosIzquierda.Clear();
+                }
+                else if (state.PactosIzquierda.Count > 0)
                 {
                     state.PactosIzquierda.RemoveAt(state.PactosIzquierda.Count - 1);
                 }
                 break;
 
             case GraphicCommand.PactosSaleDerecha:
-                if (state.PactosDerecha.Count > 0)
+                if (request.Module == GraphicModule.Faldon)
+                {
+                    state.PactosDerecha.Clear();
+                }
+                else if (state.PactosDerecha.Count > 0)
                 {
                     state.PactosDerecha.RemoveAt(state.PactosDerecha.Count - 1);
                 }
@@ -316,6 +327,35 @@ public sealed class OperationStateService : IOperationStateService
                 }
                 break;
         }
+    }
+
+    private static void UpdatePactosPartyList(List<string> destination, OperationRequest request)
+    {
+        UpdatePactosPartyList(destination, request.PartyCodes);
+        if (request.PartyCodes.Count > 0)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.CommandValue)
+            && !destination.Contains(request.CommandValue.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            destination.Add(request.CommandValue.Trim());
+        }
+    }
+
+    private static void UpdatePactosPartyList(List<string> destination, IReadOnlyList<string> partyCodes)
+    {
+        if (partyCodes.Count == 0)
+        {
+            return;
+        }
+
+        destination.Clear();
+        destination.AddRange(partyCodes
+            .Where(code => !string.IsNullOrWhiteSpace(code))
+            .Select(code => code.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase));
     }
 
     private static string ResolveDefaultScene(GraphicModule module, bool oficiales)

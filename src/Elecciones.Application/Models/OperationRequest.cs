@@ -10,6 +10,9 @@ public sealed class OperationRequest
     public int? SceneSeconds { get; init; }
     public GraphicCommand Command { get; init; }
     public string CommandValue { get; init; } = string.Empty;
+    public IReadOnlyList<string> PartyCodes { get; init; } = [];
+    public IReadOnlyList<string> LeftPartyCodes { get; init; } = [];
+    public IReadOnlyList<string> RightPartyCodes { get; init; } = [];
     public GraphicsTarget Target { get; init; }
     public bool Oficiales { get; init; }
     public string ExportName { get; init; } = "BrainStorm";

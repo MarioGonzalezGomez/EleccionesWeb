@@ -23,12 +23,12 @@ public static class GraphicLanguageExtensions
 
     public static string ToEventName(this GraphicLanguage language) => language switch
     {
-        GraphicLanguage.Castellano => "CASTELLANO",
-        GraphicLanguage.Euskera => "EUSKERA",
-        GraphicLanguage.Catalan => "CATALAN",
-        GraphicLanguage.Gallego => "GALLEGO",
-        GraphicLanguage.Valenciano => "VALENCIANO",
-        _ => "CASTELLANO"
+        GraphicLanguage.Castellano => "IDIOMA/CASTELLANO",
+        GraphicLanguage.Euskera => "IDIOMA/EUSKERA",
+        GraphicLanguage.Catalan => "IDIOMA/CATALAN",
+        GraphicLanguage.Gallego => "IDIOMA/GALEGO",
+        GraphicLanguage.Valenciano => "IDIOMA/VALENCIANO",
+        _ => "IDIOMA/CASTELLANO"
     };
 
     public static GraphicCommand ToGraphicCommand(this GraphicLanguage language) => language switch

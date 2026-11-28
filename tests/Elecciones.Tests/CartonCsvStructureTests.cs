@@ -23,6 +23,8 @@ public sealed class CartonCsvStructureTests : IDisposable
     [Theory]
     [InlineData(CartonKind.Participacion, true, 0, new string[0])]
     [InlineData(CartonKind.UltimoEscano, true, 0, new string[0])]
+    [InlineData(CartonKind.Mapa, true, 1, new[] { "mapa_escanos.csv" })]
+    [InlineData(CartonKind.Mapa, false, 1, new[] { "mapa_escanos.csv" })]
     [InlineData(CartonKind.Mayorias, true, 2, new[] { "datos_partidos.csv", "mayorias_provincias.csv" })]
     [InlineData(CartonKind.Estatal, true, 2, new[] { "datos_partidos.csv", "mayorias_provincias.csv" })]
     [InlineData(CartonKind.Mayorias, false, 2, new[] { "datos_sondeo.csv", "sondeo_provincias.csv" })]
@@ -58,6 +60,41 @@ public sealed class CartonCsvStructureTests : IDisposable
 
         var diskFiles = Directory.GetFiles(csvDir).Select(Path.GetFileName).OrderBy(x => x).ToArray();
         Assert.Equal(expectedFileNames.OrderBy(x => x).ToArray(), diskFiles);
+    }
+
+    [Fact]
+    public async Task MapaEscanosCsv_UsesOfficialProvincialSeatsAndExactColumns()
+    {
+        var csvDir = Path.Combine(_tempRoot, "MapaEscanosExact");
+        var writer = new FileBrainStormCsvWriter(
+            Options.Create(new StorageOptions
+            {
+                CsvFolder = csvDir,
+                EnableRecuentosJson = false
+            }),
+            NullLogger<FileBrainStormCsvWriter>.Instance);
+
+        var snapshot = TestSnapshotFactory.CreateSampleSnapshot(oficiales: false) with
+        {
+            MapaEscanos =
+            [
+                new("0141000", "14", 2, "2"),
+                new("0141000", "2", 1),
+                new("0104000", "1", 0),
+                new("0104000", "1", 3)
+            ]
+        };
+
+        var result = await writer.WriteCartonAsync(
+            CartonKind.Mapa,
+            snapshot,
+            new SnapshotQuery { CircunscripcionCodigo = "9900000" });
+
+        var lines = await File.ReadAllLinesAsync(result.PrimaryPath);
+        Assert.Equal("cod_lugar;cod_partido;escanos;disputa_con", lines[0]);
+        Assert.Equal("0104000;00001;3;", lines[1]);
+        Assert.Equal("0141000;00002;1;", lines[2]);
+        Assert.Equal("0141000;00014;2;00002", lines[3]);
     }
 
     [Fact]
@@ -270,9 +307,9 @@ public sealed class CartonCsvStructureTests : IDisposable
     }
 
     [Fact]
-    public async Task OperationService_OnCartonModule_WritesStrictlyFourCsvFilesAndNoJsonOrLegacyFiles()
+    public async Task OperationService_OnCartonModule_WritesStrictlyFiveCsvFilesAndNoJsonOrLegacyFiles()
     {
-        var csvDir = Path.Combine(_tempRoot, "OpServiceCartonStrictFour");
+        var csvDir = Path.Combine(_tempRoot, "OpServiceCartonStrictFive");
         var writer = new FileBrainStormCsvWriter(
             Options.Create(new StorageOptions
             {
@@ -314,11 +351,11 @@ public sealed class CartonCsvStructureTests : IDisposable
         });
 
         Assert.True(result.Success);
-        Assert.Equal(4, result.GeneratedCsvPaths.Count);
+        Assert.Equal(5, result.GeneratedCsvPaths.Count);
 
         var diskFiles = Directory.GetFiles(csvDir).Select(Path.GetFileName).OrderBy(x => x).ToArray();
         Assert.Equal(
-            new string?[] { "datos_partidos.csv", "datos_sondeo.csv", "mayorias_provincias.csv", "sondeo_provincias.csv" },
+            new string?[] { "datos_partidos.csv", "datos_sondeo.csv", "mapa_escanos.csv", "mayorias_provincias.csv", "sondeo_provincias.csv" },
             diskFiles);
     }
 

@@ -616,7 +616,7 @@
                     </div>
 
                     <div class="ws-subcard mb-2">
-                        <strong class="small d-block mb-2">Nombres de Archivos CSV de Cartón (4 Ficheros Únicos)</strong>
+                        <strong class="small d-block mb-2">Nombres de Archivos CSV de Cartón (5 Ficheros Únicos)</strong>
                         <div class="row g-2">
                             <div class="col-6">
                                 <label class="form-label form-label-sm mb-1">Partidos (Oficiales)</label>
@@ -633,6 +633,10 @@
                             <div class="col-6">
                                 <label class="form-label form-label-sm mb-1">Provincias / Mayorías (Sondeo)</label>
                                 <input class="form-control form-control-sm ws-mono" @bind="storage.CartonCsvFiles.SondeoProvinciasFileName" />
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label form-label-sm mb-1">Mapa de escaños (Oficiales)</label>
+                                <input class="form-control form-control-sm ws-mono" @bind="storage.CartonCsvFiles.MapaEscanosFileName" />
                             </div>
                         </div>
                     </div>

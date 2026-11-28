@@ -95,7 +95,7 @@
             <CircunscripcionTreeSelector Id="carton-circ-select"
                                          Items="@circunscripciones"
                                          Value="@EffectiveCircunscripcionCodigo"
-                                         Disabled="@(activeKind == CartonKind.Estatal)"
+                                         Disabled="@(activeKind is CartonKind.Estatal or CartonKind.Mapa)"
                                          ValueChanged="OnCircunscripcionSelectedAsync" />
         </div>
 
@@ -188,8 +188,8 @@
                 }
                 else
                 {
-                    <span class="ws-chip ws-mono" title="Este cartón se alimenta por variables directas de IPF mientras mantiene los 4 CSV sincronizados">
-                        Variables directas IPF · 4 CSV sincronizados
+                    <span class="ws-chip ws-mono" title="Este cartón se alimenta por variables directas de IPF mientras mantiene los 5 CSV sincronizados">
+                        Variables directas IPF · 5 CSV sincronizados
                     </span>
                 }
             </div>
@@ -240,6 +240,19 @@
                             <span class="ws-chip">Media: <strong>@currentSnapshot.ParticipacionMedia.ToString("0.00", EsCulture)%</strong></span>
                         </div>
                     }
+                </div>
+                break;
+
+            case CartonKind.Mapa:
+                <div class="ws-subcard d-flex flex-wrap align-items-center justify-content-between gap-3">
+                    <div>
+                        <div class="ws-control-group-title mb-1">Mapa de escaños por provincia (Oficiales)</div>
+                        <div class="small text-muted">
+                            Ámbito nacional fijo: <strong>España</strong>
+                            <span class="ws-mono">(@EffectiveCircunscripcionCodigo)</span>
+                            · El CSV incluye los partidos con escaños y el código del rival en la disputa del último escaño.
+                        </div>
+                    </div>
                 </div>
                 break;
 
@@ -368,9 +381,9 @@
     private string ActiveSceneName => CartonKindResolver.ToDefaultSceneName(activeKind, moduleOficiales);
 
     private bool IsBlockedBySondeo => !moduleOficiales
-        && activeKind == CartonKind.UltimoEscano;
+        && activeKind is CartonKind.UltimoEscano or CartonKind.Mapa;
 
-    private string EffectiveCircunscripcionCodigo => activeKind == CartonKind.Estatal
+    private string EffectiveCircunscripcionCodigo => activeKind is CartonKind.Estatal or CartonKind.Mapa
         ? ResolveGeneralCircunscripcionCodigo()
         : selectedCircunscripcionCodigo;
 
@@ -403,6 +416,10 @@
                 [
                     ("Sondeo", files.DatosSondeoFileName),
                     ("Provincias", files.SondeoProvinciasFileName)
+                ],
+                CartonKind.Mapa =>
+                [
+                    ("Mapa (Oficiales)", files.MapaEscanosFileName)
                 ],
                 _ => []
             };
@@ -501,7 +518,7 @@
 
         ModuleLockService.ForceRelease(GraphicModule.Carton);
         var ok = ModuleLockService.TryAcquire(GraphicModule.Carton, operatorId);
-        feedbackMessage = ok ? "Control de Cartón activo. Los 4 ficheros CSV están sincronizados." : "No se pudo tomar el control.";
+        feedbackMessage = ok ? "Control de Cartón activo. Los 5 ficheros CSV están sincronizados." : "No se pudo tomar el control.";
         feedbackIsError = !ok;
 
         if (ok && currentSnapshot is not null)
@@ -516,6 +533,7 @@
         CartonKind.Mayorias => "Mayorías",
         CartonKind.Estatal => "Estatal",
         CartonKind.UltimoEscano => "Último escaño",
+        CartonKind.Mapa => "Mapa",
         _ => kind.ToString()
     };
 

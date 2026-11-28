@@ -60,12 +60,16 @@ public sealed class DefaultSignalComposer : ISignalComposer
 
         var scene = ResolveScene(request);
 
-        var lines = new List<string>
+        var lines = new List<string>();
+        if (request.Module != GraphicModule.Faldon)
         {
-            $"itemset('<{{BD}}>META/CIRC','{snapshot.Circunscripcion.Codigo}');",
-            $"itemset('<{{BD}}>META/MODE','{(request.Oficiales ? "OFICIAL" : "SONDEO")}');",
-            $"itemset('<{{BD}}>META/AVANCE','{snapshot.Avance}');"
-        };
+            lines.AddRange(
+            [
+                $"itemset('<{{BD}}>META/CIRC','{snapshot.Circunscripcion.Codigo}');",
+                $"itemset('<{{BD}}>META/MODE','{(request.Oficiales ? "OFICIAL" : "SONDEO")}');",
+                $"itemset('<{{BD}}>META/AVANCE','{snapshot.Avance}');"
+            ]);
+        }
 
         if (request.Action == OperationActionType.Reset)
         {
@@ -77,6 +81,23 @@ public sealed class DefaultSignalComposer : ISignalComposer
         if (request.Command != GraphicCommand.None)
         {
             lines.AddRange(ResolveCommandLines(request, snapshot));
+            return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
+        if (request.Module == GraphicModule.Faldon && IsFaldonPactometroScene(scene))
+        {
+            lines.AddRange(ResolveFaldonPactometroScene(request));
+            return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
+        if (request.Module == GraphicModule.Faldon && IsFaldonUltimoEscanoScene(scene))
+        {
+            if (!request.Oficiales && request.Action != OperationActionType.Exit)
+            {
+                return string.Empty;
+            }
+
+            lines.AddRange(ResolveFaldonUltimoEscanoScene(request, snapshot));
             return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
         }
 
@@ -140,6 +161,16 @@ public sealed class DefaultSignalComposer : ISignalComposer
         }
 
         return string.Join("\n", lines);
+    }
+
+    private static bool IsFaldonPactometroScene(string scene)
+    {
+        return string.Equals(scene, "Pactometro", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsFaldonUltimoEscanoScene(string scene)
+    {
+        return string.Equals(scene, "SUPERFALDON_ULTIMOESCANO", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsFaldonTickerScene(string scene)
@@ -604,13 +635,30 @@ public sealed class DefaultSignalComposer : ISignalComposer
                 ? ResolveSuperfaldonSedesSale(request)
                 : ResolveFaldonSedesSale(request),
 
-            GraphicCommand.PactosEntra => [EventRun("Pactometro/Entra")],
-            GraphicCommand.PactosSale => ResolvePactosSale(request),
-            GraphicCommand.PactosReinicio => ResolvePactosReinicio(request),
-            GraphicCommand.PactosEntraIzquierda => ResolvePactosEntra(request, snapshot, true),
-            GraphicCommand.PactosEntraDerecha => ResolvePactosEntra(request, snapshot, false),
-            GraphicCommand.PactosSaleIzquierda => ResolvePactosSaleLateral(request, snapshot, true),
-            GraphicCommand.PactosSaleDerecha => ResolvePactosSaleLateral(request, snapshot, false),
+            GraphicCommand.PactosEntra => request.Module == GraphicModule.Faldon
+                ? [EventRun("PACTOMETRO/ENTRA")]
+                : [EventRun("Pactometro/Entra")],
+            GraphicCommand.PactosSale => request.Module == GraphicModule.Faldon
+                ? ResolveFaldonPactosSale(request)
+                : ResolvePactosSale(request),
+            GraphicCommand.PactosReinicio => request.Module == GraphicModule.Faldon
+                ? ResolveFaldonPactosReinicio(request)
+                : ResolvePactosReinicio(request),
+            GraphicCommand.PactosEntraIzquierda => request.Module == GraphicModule.Faldon
+                ? ResolveFaldonPactosEntra(request, true)
+                : ResolvePactosEntra(request, snapshot, true),
+            GraphicCommand.PactosEntraDerecha => request.Module == GraphicModule.Faldon
+                ? ResolveFaldonPactosEntra(request, false)
+                : ResolvePactosEntra(request, snapshot, false),
+            GraphicCommand.PactosEntraAmbos => request.Module == GraphicModule.Faldon
+                ? ResolveFaldonPactosEntraAmbos(request)
+                : [],
+            GraphicCommand.PactosSaleIzquierda => request.Module == GraphicModule.Faldon
+                ? ResolveFaldonPactosSaleLateral(request, true)
+                : ResolvePactosSaleLateral(request, snapshot, true),
+            GraphicCommand.PactosSaleDerecha => request.Module == GraphicModule.Faldon
+                ? ResolveFaldonPactosSaleLateral(request, false)
+                : ResolvePactosSaleLateral(request, snapshot, false),
 
             GraphicCommand.UltimoLimpiaPartidos => ResolveUltimoLimpiaPartidos(request),
             GraphicCommand.UltimoEntraPartidoIzquierda => ResolveUltimoEntraPartido(request, snapshot, true),
@@ -1289,6 +1337,161 @@ public sealed class DefaultSignalComposer : ISignalComposer
             EventRun($"{eventRoot}/reinicioPactometroIzq"),
             EventRun($"{eventRoot}/reinicioPactometroDer")
         ];
+    }
+
+    private IEnumerable<string> ResolveFaldonPactosSale(OperationRequest request)
+    {
+        lock (_stateLock)
+        {
+            _pactosStates.Remove(request.Module);
+        }
+
+        return [EventRun("PACTOMETRO/SALE")];
+    }
+
+    private IEnumerable<string> ResolveFaldonPactosReinicio(OperationRequest request)
+    {
+        lock (_stateLock)
+        {
+            _pactosStates.Remove(request.Module);
+        }
+
+        return
+        [
+            EventRun("PACTOMETRO/SALE_IZQUIERDA"),
+            EventRun("PACTOMETRO/SALE_DERECHA")
+        ];
+    }
+
+    private IEnumerable<string> ResolveFaldonPactosEntra(OperationRequest request, bool izquierda)
+    {
+        IReadOnlyList<string> sourceCodes = request.PartyCodes.Count > 0
+            ? request.PartyCodes
+            : string.IsNullOrWhiteSpace(request.CommandValue) ? [] : [request.CommandValue];
+        var codes = FormatFaldonPactosPartyCodes(sourceCodes);
+
+        if (codes.Count == 0)
+        {
+            return [];
+        }
+
+        lock (_stateLock)
+        {
+            var state = GetOrCreatePactosState(request.Module);
+            var list = izquierda ? state.PartidosIzquierda : state.PartidosDerecha;
+            list.Clear();
+            list.AddRange(codes);
+        }
+
+        var path = izquierda
+            ? "SuperfaldonPactometro/Izquierda"
+            : "SuperfaldonPactometro/Derecha";
+        var eventName = izquierda
+            ? "PACTOMETRO/ENTRA_IZQUIERDA"
+            : "PACTOMETRO/ENTRA_DERECHA";
+
+        return
+        [
+            ItemSetStringList(path, codes),
+            EventRun(eventName)
+        ];
+    }
+
+    private IEnumerable<string> ResolveFaldonPactosEntraAmbos(OperationRequest request)
+    {
+        var leftCodes = FormatFaldonPactosPartyCodes(request.LeftPartyCodes);
+        var rightCodes = FormatFaldonPactosPartyCodes(request.RightPartyCodes);
+        if (leftCodes.Count == 0 || rightCodes.Count == 0)
+        {
+            return [];
+        }
+
+        lock (_stateLock)
+        {
+            var state = GetOrCreatePactosState(request.Module);
+            state.PartidosIzquierda.Clear();
+            state.PartidosIzquierda.AddRange(leftCodes);
+            state.PartidosDerecha.Clear();
+            state.PartidosDerecha.AddRange(rightCodes);
+        }
+
+        return
+        [
+            ItemSetStringList("SuperfaldonPactometro/Izquierda", leftCodes),
+            ItemSetStringList("SuperfaldonPactometro/Derecha", rightCodes),
+            EventRun("PACTOMETRO/ENTRA_IZQUIERDA"),
+            EventRun("PACTOMETRO/ENTRA_DERECHA")
+        ];
+    }
+
+    private static List<string> FormatFaldonPactosPartyCodes(IEnumerable<string> sourceCodes)
+    {
+        return sourceCodes
+            .Select(FormatFiveDigitCartonPartyCode)
+            .Where(code => !string.IsNullOrWhiteSpace(code))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private IEnumerable<string> ResolveFaldonPactosSaleLateral(OperationRequest request, bool izquierda)
+    {
+        lock (_stateLock)
+        {
+            var state = GetOrCreatePactosState(request.Module);
+            var list = izquierda ? state.PartidosIzquierda : state.PartidosDerecha;
+            list.Clear();
+        }
+
+        return
+        [
+            EventRun(izquierda ? "PACTOMETRO/SALE_IZQUIERDA" : "PACTOMETRO/SALE_DERECHA")
+        ];
+    }
+
+    private IEnumerable<string> ResolveFaldonPactometroScene(OperationRequest request)
+    {
+        if (request.Action == OperationActionType.Exit)
+        {
+            lock (_stateLock)
+            {
+                _pactosStates.Remove(request.Module);
+            }
+
+            return [EventRun("PACTOMETRO/SALE")];
+        }
+
+        return request.Action switch
+        {
+            OperationActionType.Enter => [EventRun("PACTOMETRO/ENTRA")],
+            OperationActionType.Update => [EventRun("ACTUALIZAR")],
+            _ => []
+        };
+    }
+
+    private static IEnumerable<string> ResolveFaldonUltimoEscanoScene(
+        OperationRequest request,
+        BrainStormSnapshot snapshot)
+    {
+        switch (request.Action)
+        {
+            case OperationActionType.Enter:
+                var enterLines = new List<string>();
+                AppendUltimoEscanoVariables(enterLines, snapshot, "SuperfaldonUltimoEscano", "Provincia");
+                enterLines.Add(EventRun("SUPERFALDON_ULTIMOESCANO/ENTRA"));
+                return enterLines;
+
+            case OperationActionType.Update:
+                var updateLines = new List<string>();
+                AppendUltimoEscanoVariables(updateLines, snapshot, "SuperfaldonUltimoEscano", "Provincia");
+                updateLines.Add(EventRun("SUPERFALDON_ULTIMOESCANO/ACTUALIZA"));
+                return updateLines;
+
+            case OperationActionType.Exit:
+                return [EventRun("SUPERFALDON_ULTIMOESCANO/SALE")];
+
+            default:
+                return [];
+        }
     }
 
     private IEnumerable<string> ResolvePactosReinicio(OperationRequest request)
@@ -2079,6 +2282,9 @@ public sealed class DefaultSignalComposer : ISignalComposer
                 case CartonKind.UltimoEscano:
                     ComposeCartonUltimoEscanoNew(request, snapshot, state, currentCircCode, lines);
                     break;
+                case CartonKind.Mapa:
+                    ComposeCartonMapaNew(request, state, currentCircCode, lines);
+                    break;
             }
         }
 
@@ -2246,7 +2452,52 @@ public sealed class DefaultSignalComposer : ISignalComposer
         }
     }
 
+    private static void ComposeCartonMapaNew(
+        OperationRequest request,
+        CartonState state,
+        string currentCircCode,
+        List<string> lines)
+    {
+        switch (request.Action)
+        {
+            case OperationActionType.Enter:
+                if (!request.Oficiales)
+                {
+                    return;
+                }
+
+                lines.Add(EventRun("ACTUALIZAR"));
+                lines.Add(EventRun("MAPA_ESCANOS/ENTRA"));
+                state.SetOnAir(CartonKind.Mapa, currentCircCode, oficiales: true);
+                break;
+
+            case OperationActionType.Update:
+                if (!request.Oficiales)
+                {
+                    return;
+                }
+
+                lines.Add(EventRun("ACTUALIZAR"));
+                state.OnAirCircunscripcionCodigo = currentCircCode;
+                break;
+
+            case OperationActionType.Exit:
+                lines.Add(EventRun("MAPA_ESCANOS/SALE"));
+                state.ClearOnAir();
+                break;
+        }
+    }
+
     private static void AppendCartonUltimoEscanoVariables(List<string> lines, BrainStormSnapshot snapshot)
+    {
+        AppendUltimoEscanoVariables(lines, snapshot, "UltimoEscano", "Lugar");
+    }
+
+    private static void AppendUltimoEscanoVariables(
+        List<string> lines,
+        BrainStormSnapshot snapshot,
+        string root,
+        string locationProperty)
     {
         var sourceParties = snapshot.PartidosCircunscripcionCompletos is { Count: > 0 }
             ? snapshot.PartidosCircunscripcionCompletos
@@ -2255,11 +2506,11 @@ public sealed class DefaultSignalComposer : ISignalComposer
         var ganador = sourceParties.FirstOrDefault(p => p.EsUltimoEscano != 0);
         var segundo = sourceParties.FirstOrDefault(p => p.LuchaUltimoEscano != 0);
 
-        lines.Add(MapString("UltimoEscano/Ganador", FormatFiveDigitCartonPartyCode(ganador?.Codigo)));
-        lines.Add(MapString("UltimoEscano/Segundo", FormatFiveDigitCartonPartyCode(segundo?.Codigo)));
-        lines.Add(MapString("UltimoEscano/Lugar", snapshot.Circunscripcion.Nombre));
-        lines.Add(ItemSetNumeric("UltimoEscano/NewPendientes", "MAP_INT_PAR", snapshot.VotantesFaltan));
-        lines.Add(ItemSetNumeric("UltimoEscano/NewVotos", "MAP_INT_PAR", segundo?.RestoVotos ?? 0));
+        lines.Add(MapString($"{root}/Ganador", FormatFiveDigitCartonPartyCode(ganador?.Codigo)));
+        lines.Add(MapString($"{root}/Segundo", FormatFiveDigitCartonPartyCode(segundo?.Codigo)));
+        lines.Add(MapString($"{root}/{locationProperty}", snapshot.Circunscripcion.Nombre));
+        lines.Add(ItemSetNumeric($"{root}/NewPendientes", "MAP_INT_PAR", snapshot.VotantesFaltan));
+        lines.Add(ItemSetNumeric($"{root}/NewVotos", "MAP_INT_PAR", segundo?.RestoVotos ?? 0));
     }
 
     private static string FormatFiveDigitCartonPartyCode(string? rawCode)
@@ -2775,6 +3026,13 @@ public sealed class DefaultSignalComposer : ISignalComposer
     private static string MapString(string path, string value)
     {
         return ItemSetString(path, "MAP_STRING_PAR", value);
+    }
+
+    private static string ItemSetStringList(string path, IReadOnlyList<string> values)
+    {
+        var formattedValues = string.Join(", ", values.Select(value =>
+            $"\"{value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)}\""));
+        return $"itemset('<{{BD}}>{path}','MAP_LSTRING_PAR',[{formattedValues}]);";
     }
 
     private static string ItemSetNoValue(string path, string property)

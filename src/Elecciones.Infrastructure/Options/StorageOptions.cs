@@ -90,4 +90,5 @@ public sealed class CartonCsvFilesOptions
     public string MayoriasProvinciasFileName { get; set; } = "mayorias_provincias.csv";
     public string DatosSondeoFileName { get; set; } = "datos_sondeo.csv";
     public string SondeoProvinciasFileName { get; set; } = "sondeo_provincias.csv";
+    public string MapaEscanosFileName { get; set; } = "mapa_escanos.csv";
 }

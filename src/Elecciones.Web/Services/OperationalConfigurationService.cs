@@ -176,7 +176,8 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
                 ["DatosPartidosFileName"] = cartonFiles.DatosPartidosFileName?.Trim() ?? "datos_partidos.csv",
                 ["MayoriasProvinciasFileName"] = cartonFiles.MayoriasProvinciasFileName?.Trim() ?? "mayorias_provincias.csv",
                 ["DatosSondeoFileName"] = cartonFiles.DatosSondeoFileName?.Trim() ?? "datos_sondeo.csv",
-                ["SondeoProvinciasFileName"] = cartonFiles.SondeoProvinciasFileName?.Trim() ?? "sondeo_provincias.csv"
+                ["SondeoProvinciasFileName"] = cartonFiles.SondeoProvinciasFileName?.Trim() ?? "sondeo_provincias.csv",
+                ["MapaEscanosFileName"] = cartonFiles.MapaEscanosFileName?.Trim() ?? "mapa_escanos.csv"
             };
             root["Storage"] = storageSection;
 
@@ -432,7 +433,8 @@ public sealed class OperationalConfigurationService : IOperationalConfigurationS
                 DatosPartidosFileName = srcFiles.DatosPartidosFileName?.Trim() ?? "datos_partidos.csv",
                 MayoriasProvinciasFileName = srcFiles.MayoriasProvinciasFileName?.Trim() ?? "mayorias_provincias.csv",
                 DatosSondeoFileName = srcFiles.DatosSondeoFileName?.Trim() ?? "datos_sondeo.csv",
-                SondeoProvinciasFileName = srcFiles.SondeoProvinciasFileName?.Trim() ?? "sondeo_provincias.csv"
+                SondeoProvinciasFileName = srcFiles.SondeoProvinciasFileName?.Trim() ?? "sondeo_provincias.csv",
+                MapaEscanosFileName = srcFiles.MapaEscanosFileName?.Trim() ?? "mapa_escanos.csv"
             }
         };
     }

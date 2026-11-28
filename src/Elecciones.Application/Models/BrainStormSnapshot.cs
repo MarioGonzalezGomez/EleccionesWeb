@@ -40,6 +40,7 @@ public sealed record BrainStormSnapshot
     public IReadOnlyList<ProvinciaMapaSnapshot> ProvinciasAutonomia { get; init; } = [];
     public IReadOnlyList<CircunscripcionMayoriaSnapshot> MayoriasCircunscripciones { get; init; } = [];
     public IReadOnlyList<CircunscripcionMayoriaSnapshot> SondeoMayoriasCircunscripciones { get; init; } = [];
+    public IReadOnlyList<MapaEscanosSnapshot> MapaEscanos { get; init; } = [];
     public IReadOnlyList<string> TodasLasProvinciasMapa { get; init; } = [];
     public IReadOnlyList<VideoSlotSnapshot> VideoSlots { get; init; } = [];
 }

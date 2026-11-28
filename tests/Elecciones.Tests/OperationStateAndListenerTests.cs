@@ -74,6 +74,83 @@ public sealed class OperationStateAndListenerTests
     }
 
     [Fact]
+    public void FaldonPactometroState_ReplacesListsInSelectionOrderAndClearsOnSideSale()
+    {
+        var stateService = new OperationStateService();
+        var snapshot = TestSnapshotFactory.CreateSampleSnapshot();
+
+        stateService.RecordExecution(new OperationRequest
+        {
+            OperatorId = "op-faldon",
+            Module = GraphicModule.Faldon,
+            Command = GraphicCommand.PactosEntraIzquierda,
+            PartyCodes = ["00002", "00001"],
+            Oficiales = true
+        }, snapshot);
+
+        Assert.Equal(new[] { "00002", "00001" }, stateService.GetState(GraphicModule.Faldon).PactosIzquierda);
+
+        stateService.RecordExecution(new OperationRequest
+        {
+            OperatorId = "op-faldon",
+            Module = GraphicModule.Faldon,
+            Command = GraphicCommand.PactosSaleIzquierda,
+            Oficiales = true
+        }, snapshot);
+
+        Assert.Empty(stateService.GetState(GraphicModule.Faldon).PactosIzquierda);
+
+        stateService.RecordExecution(new OperationRequest
+        {
+            OperatorId = "op-faldon",
+            Module = GraphicModule.Faldon,
+            Command = GraphicCommand.PactosEntraDerecha,
+            PartyCodes = ["00003"],
+            Oficiales = true
+        }, snapshot);
+        stateService.RecordExecution(new OperationRequest
+        {
+            OperatorId = "op-faldon",
+            Module = GraphicModule.Faldon,
+            Scene = "Pactometro",
+            Action = OperationActionType.Enter,
+            Oficiales = true
+        }, snapshot);
+
+        stateService.RecordExecution(new OperationRequest
+        {
+            OperatorId = "op-faldon",
+            Module = GraphicModule.Faldon,
+            Scene = "Pactometro",
+            Action = OperationActionType.Exit,
+            Oficiales = true
+        }, snapshot);
+
+        var afterChartExit = stateService.GetState(GraphicModule.Faldon);
+        Assert.Empty(afterChartExit.PactosIzquierda);
+        Assert.Empty(afterChartExit.PactosDerecha);
+    }
+
+    [Fact]
+    public void FaldonPactometroCombinedEntry_StoresBothPartyLists()
+    {
+        var stateService = new OperationStateService();
+        stateService.RecordExecution(new OperationRequest
+        {
+            OperatorId = "op-faldon",
+            Module = GraphicModule.Faldon,
+            Command = GraphicCommand.PactosEntraAmbos,
+            LeftPartyCodes = ["00002", "00001"],
+            RightPartyCodes = ["00003"],
+            Oficiales = true
+        }, TestSnapshotFactory.CreateSampleSnapshot());
+
+        var state = stateService.GetState(GraphicModule.Faldon);
+        Assert.Equal(new[] { "00002", "00001" }, state.PactosIzquierda);
+        Assert.Equal(new[] { "00003" }, state.PactosDerecha);
+    }
+
+    [Fact]
     public async Task DatabaseChangeListenerService_DetectsDataChangeAndDispatchesAutoUpdateWhenOnAir()
     {
         var stateService = new OperationStateService();
@@ -120,6 +197,46 @@ public sealed class OperationStateAndListenerTests
         Assert.Equal(1, thirdCount);
         Assert.Single(fakeGateway.SentSignals);
         Assert.Contains("Escrutinio/Actualiza", fakeGateway.SentSignals[0]);
+    }
+
+    [Theory]
+    [InlineData("Pactometro", "itemset('<{BD}>ACTUALIZAR','EVENT_RUN');")]
+    [InlineData("SUPERFALDON_ULTIMOESCANO", "itemset('<{BD}>SUPERFALDON_ULTIMOESCANO/ACTUALIZA','EVENT_RUN');")]
+    public async Task DatabaseChangeListener_FaldonChartsSendTheirRefreshEventWhenOnAir(string scene, string expectedEvent)
+    {
+        var stateService = new OperationStateService();
+        var initialSnapshot = TestSnapshotFactory.CreateSampleSnapshot();
+        var fakeData = new MutableFakeDataService(initialSnapshot);
+        var fakeGateway = new FakeGraphicsGateway();
+
+        stateService.RecordExecution(new OperationRequest
+        {
+            OperatorId = "op1",
+            Module = GraphicModule.Faldon,
+            Scene = scene,
+            Action = OperationActionType.Enter,
+            Oficiales = true,
+            Query = new SnapshotQuery
+            {
+                Kind = SnapshotQueryKind.Circunscripcion,
+                CircunscripcionCodigo = "9900000",
+                Avance = 1
+            }
+        }, initialSnapshot);
+
+        var listener = new DatabaseChangeListenerService(
+            stateService,
+            fakeData,
+            new FakeCsvWriter(),
+            new DefaultSignalComposer(),
+            fakeGateway,
+            NullLogger<DatabaseChangeListenerService>.Instance);
+
+        Assert.Equal(0, await listener.CheckAndDispatchUpdatesOnceAsync());
+        fakeData.CurrentSnapshot = initialSnapshot with { Escrutado = 91.20 };
+
+        Assert.Equal(1, await listener.CheckAndDispatchUpdatesOnceAsync());
+        Assert.Contains(expectedEvent, Assert.Single(fakeGateway.SentSignals));
     }
 
     [Fact]
@@ -394,7 +511,8 @@ public sealed class OperationStateAndListenerTests
             return Task.FromResult<IReadOnlyList<CartonCsvFileArtifact>>(
             [
                 new("Partidos", "datos_partidos.csv", "datos_partidos.csv"),
-                new("Provincia", "mayorias_provincias.csv", "mayorias_provincias.csv")
+                new("Provincia", "mayorias_provincias.csv", "mayorias_provincias.csv"),
+                new("Mapa", "mapa_escanos.csv", "mapa_escanos.csv")
             ]);
         }
 

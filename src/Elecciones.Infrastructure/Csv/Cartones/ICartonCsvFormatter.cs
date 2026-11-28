@@ -10,6 +10,7 @@ public static class CartonCsvRoles
     public const string MayoriasProvincias = "MayoriasProvincias";
     public const string DatosSondeo = "DatosSondeo";
     public const string SondeoProvincias = "SondeoProvincias";
+    public const string MapaEscanos = "MapaEscanos";
 }
 
 public sealed record CartonCsvDescriptor(

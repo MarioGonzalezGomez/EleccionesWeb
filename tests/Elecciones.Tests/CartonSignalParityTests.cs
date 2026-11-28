@@ -454,4 +454,60 @@ public sealed class CartonSignalParityTests
 
         Assert.Equal(string.Empty, blockedSondeo);
     }
+
+    [Fact]
+    public void Mapa_UsesLifecycleEventsAndOfficialOnlyRefresh()
+    {
+        var composer = new DefaultSignalComposer();
+        var snapshot = TestSnapshotFactory.CreateSampleSnapshot(oficiales: true);
+
+        var enter = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mapa,
+            Scene = "MAPA_ESCANOS",
+            Action = OperationActionType.Enter,
+            Oficiales = true
+        }, snapshot);
+
+        Assert.Equal(
+            string.Join("\n",
+                "itemset('<{BD}>ACTUALIZAR','EVENT_RUN');",
+                "itemset('<{BD}>MAPA_ESCANOS/ENTRA','EVENT_RUN');"),
+            enter);
+
+        var update = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mapa,
+            Scene = "MAPA_ESCANOS",
+            Action = OperationActionType.Update,
+            Oficiales = true
+        }, snapshot);
+        Assert.Equal("itemset('<{BD}>ACTUALIZAR','EVENT_RUN');", update);
+
+        var blockedSondeo = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mapa,
+            Scene = "MAPA_ESCANOS",
+            Action = OperationActionType.Enter,
+            Oficiales = false
+        }, snapshot);
+        Assert.Equal(string.Empty, blockedSondeo);
+
+        var exit = composer.Compose(new OperationRequest
+        {
+            OperatorId = "op_carton",
+            Module = GraphicModule.Carton,
+            CartonKind = CartonKind.Mapa,
+            Scene = "MAPA_ESCANOS",
+            Action = OperationActionType.Exit,
+            Oficiales = false
+        }, snapshot);
+        Assert.Equal("itemset('<{BD}>MAPA_ESCANOS/SALE','EVENT_RUN');", exit);
+    }
 }

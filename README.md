@@ -16,6 +16,7 @@ Aplicacion web para operacion de graficos electorales en red con despliegue cent
 - Botones de comandos especificos por modulo (Ticker/Sedes/Pactos/Ultimo) con `GraphicCommand`.
 - Vistas por modulo: `/operacion/faldon`, `/operacion/carton`, `/operacion/superfaldon`.
 - Generacion de CSV BrainStorm en servidor.
+- Carton incluye el grafico Mapa con `mapa_escanos.csv` (escanos oficiales por provincia y disputa del ultimo escano), con eventos `MAPA_ESCANOS/ENTRA` y `MAPA_ESCANOS/SALE`.
 - Composicion de senales en formato `itemset(...)` y envio TCP a IPF/Prime.
 - Permisos por operador/modulo configurables en `OperatorAuthorization`.
 

@@ -162,7 +162,7 @@
 
         <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 ws-tabs-header-row">
             <div class="ws-tabs mb-0">
-                @foreach (var mode in Enum.GetValues<FaldonMode>())
+                @foreach (var mode in VisibleModes)
                 {
                     <button type="button"
                             class="ws-tab-btn @(activeMode == mode ? "active" : null)"
@@ -379,16 +379,23 @@
             case FaldonMode.Pactometro:
                 <div class="ws-subcard mb-3">
                     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
-                        <div class="d-flex gap-2">
-                            <button class="ws-btn ws-btn-live" type="button" @onclick="EnterPactosAsync" disabled="@(!CanExecute)">Pactos Entra</button>
-                            <button class="ws-btn" type="button" @onclick="ResetPactosAsync" disabled="@(!CanExecute)">Pactos Reinicio</button>
-                            <button class="ws-btn ws-btn-amber" type="button" @onclick="ExitPactosAsync" disabled="@(!CanExecute)">Pactos Sale</button>
+                        <div>
+                            <div class="ws-control-group-title mb-1">Preparar ambos bloques</div>
+                            <span class="text-muted small">Selecciona de forma independiente los partidos de cada lado en la tabla inferior.</span>
                         </div>
                         <div class="d-flex gap-2 flex-wrap">
-                            <button class="ws-btn ws-btn-live-outline" type="button" @onclick="AddLeftAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Izquierda (@(SelectedParty?.Siglas ?? "-"))</button>
-                            <button class="ws-btn ws-btn-amber-outline" type="button" @onclick="RemoveLeftAsync" disabled="@(!CanExecute || leftParties.Count == 0)">- Izquierda</button>
-                            <button class="ws-btn ws-btn-primary-outline" type="button" @onclick="AddRightAsync" disabled="@(!CanExecute || SelectedParty is null)">+ Derecha (@(SelectedParty?.Siglas ?? "-"))</button>
-                            <button class="ws-btn ws-btn-amber-outline" type="button" @onclick="RemoveRightAsync" disabled="@(!CanExecute || rightParties.Count == 0)">- Derecha</button>
+                            <button class="ws-btn ws-btn-live-outline" type="button" @onclick="() => ApplyPactometerPartiesAsync(true)" disabled="@(!CanExecute || selectedLeftPactPartyCodes.Count == 0)">
+                                Aplicar Izquierda (@selectedLeftPactPartyCodes.Count)
+                            </button>
+                            <button class="ws-btn ws-btn-primary-outline" type="button" @onclick="() => ApplyPactometerPartiesAsync(false)" disabled="@(!CanExecute || selectedRightPactPartyCodes.Count == 0)">
+                                Aplicar Derecha (@selectedRightPactPartyCodes.Count)
+                            </button>
+                            <button class="ws-btn ws-btn-live" type="button" @onclick="ApplyBothPactometerPartiesAsync" disabled="@(!CanExecute || selectedLeftPactPartyCodes.Count == 0 || selectedRightPactPartyCodes.Count == 0)">
+                                Lanzar ambos (@selectedLeftPactPartyCodes.Count · @selectedRightPactPartyCodes.Count)
+                            </button>
+                            <button class="ws-btn ws-btn-amber-outline" type="button" @onclick="ClearLeftAsync" disabled="@(!CanExecute)">Sale Izquierda</button>
+                            <button class="ws-btn ws-btn-amber-outline" type="button" @onclick="ClearRightAsync" disabled="@(!CanExecute)">Sale Derecha</button>
+                            <button class="ws-btn" type="button" @onclick="ResetPactosAsync" disabled="@(!CanExecute)">Vaciar composición</button>
                         </div>
                     </div>
                 </div>
@@ -444,6 +451,29 @@
                 </div>
                 break;
 
+            case FaldonMode.UltimoEscano:
+                <div class="ws-banner ws-banner-warning mb-3" role="status">
+                    Último escaño está disponible únicamente con datos Oficiales. Las acciones de entrada y actualización no se enviarán en modo Sondeo.
+                </div>
+                <div class="ws-subcard">
+                    <div class="ws-control-group-title">Datos del último escaño</div>
+                    @if (UltimoGanador is null || UltimoSegundo is null)
+                    {
+                        <span class="text-muted">No hay información de último escaño disponible para esta circunscripción.</span>
+                    }
+                    else
+                    {
+                        <div class="d-flex flex-wrap gap-2 align-items-center">
+                            <span class="ws-chip ws-chip-amber">Ganador: <strong>@UltimoGanador.Siglas</strong></span>
+                            <span class="ws-chip ws-chip-accent">Segundo: <strong>@UltimoSegundo.Siglas</strong></span>
+                            <span class="ws-chip">Votos necesarios: <strong>@UltimoSegundo.RestoVotos</strong></span>
+                            <span class="ws-chip">Pendientes: <strong>@(currentSnapshot?.VotantesFaltan ?? 0)</strong></span>
+                            <span class="ws-chip">Provincia: <strong>@currentSnapshot?.Circunscripcion.Nombre</strong></span>
+                        </div>
+                    }
+                </div>
+                break;
+
             case FaldonMode.CuentaAtras:
                 <div class="ws-subcard d-flex align-items-center gap-3">
                     <label for="faldon-countdown-input" class="form-label mb-0 fw-semibold">Segundos de cuenta atrás:</label>
@@ -453,14 +483,19 @@
         }
     </section>
 
-    <PartySidebarTable Parties="@availableParties"
+    <PartySidebarTable Parties="@DisplayedParties"
                        Snapshot="@currentSnapshot"
                        SelectedPartyCode="@selectedPartyCode"
                        Oficiales="@moduleOficiales"
-                       ShowUltimoIndicators="false"
+                       ShowUltimoIndicators="@(activeMode == FaldonMode.UltimoEscano)"
+                       PactometerSelectionEnabled="@(activeMode == FaldonMode.Pactometro)"
+                       LeftSelectedPartyCodes="@selectedLeftPactPartyCodes"
+                       RightSelectedPartyCodes="@selectedRightPactPartyCodes"
                        Loading="@loadingParties"
                        OnPartySelected="OnPartySelected"
                        OnPartyDoubleClicked="OnPartyDoubleClickedAsync"
+                       OnLeftPartySelectionChanged="ToggleLeftPactPartySelection"
+                       OnRightPartySelectionChanged="ToggleRightPactPartySelection"
                        OnRefreshClicked="LoadPartiesAsync" />
 </div>
 
@@ -472,11 +507,13 @@
         Sedes,
         VideoPrime,
         Pactometro,
+        UltimoEscano,
         CuentaAtras
     }
 
     private static readonly CultureInfo EsCulture = CultureInfo.GetCultureInfo("es-ES");
-    private FaldonMode activeMode = FaldonMode.General;
+    private static readonly FaldonMode[] VisibleModes = [FaldonMode.Pactometro, FaldonMode.UltimoEscano];
+    private FaldonMode activeMode = FaldonMode.Pactometro;
     private string operatorId = WorkspaceResolver.DefaultFaldonOperator;
     private GlobalOperationalSettings globalSettings = new();
     private ModuleOperationalState moduleState = new() { Module = GraphicModule.Faldon };
@@ -491,6 +528,8 @@
     private IReadOnlyList<VideoSourceOptions> videoSources = [];
     private readonly List<PartidoSnapshot> leftParties = [];
     private readonly List<PartidoSnapshot> rightParties = [];
+    private readonly List<string> selectedLeftPactPartyCodes = [];
+    private readonly List<string> selectedRightPactPartyCodes = [];
 
     private string selectedCircunscripcionCodigo = string.Empty;
     private string selectedMedioCodigo = "RTVE";
@@ -513,12 +552,33 @@
         FaldonMode.Sedes => "SEDES",
         FaldonMode.VideoPrime => "TICKER",
         FaldonMode.Pactometro => "Pactometro",
+        FaldonMode.UltimoEscano => "SUPERFALDON_ULTIMOESCANO",
         FaldonMode.CuentaAtras => "CuentaAtras",
         _ => "Escrutinio"
     };
 
-    private PartidoSnapshot? SelectedParty => availableParties.FirstOrDefault(p =>
+    private PartidoSnapshot? SelectedParty => DisplayedParties.FirstOrDefault(p =>
         string.Equals(p.Codigo, selectedPartyCode, StringComparison.OrdinalIgnoreCase));
+
+    private IReadOnlyList<PartidoSnapshot> FullCircunscripcionParties =>
+        currentSnapshot?.PartidosCircunscripcionCompletos is { Count: > 0 } full
+            ? full
+            : availableParties;
+
+    private PartidoSnapshot? UltimoGanador => FullCircunscripcionParties.FirstOrDefault(p => p.EsUltimoEscano != 0);
+    private PartidoSnapshot? UltimoSegundo => FullCircunscripcionParties.FirstOrDefault(p => p.LuchaUltimoEscano != 0);
+
+    private IReadOnlyList<PartidoSnapshot> DisplayedParties => activeMode == FaldonMode.UltimoEscano
+        ? availableParties
+            .Concat(FullCircunscripcionParties.Where(p => p.EsUltimoEscano != 0 || p.LuchaUltimoEscano != 0))
+            .DistinctBy(p => p.Codigo, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(p => p.EsUltimoEscano)
+            .ThenByDescending(p => p.LuchaUltimoEscano)
+            .ThenByDescending(GetDisplayEscanos)
+            .ThenByDescending(p => p.PorcentajeVoto)
+            .ThenByDescending(p => p.Votos)
+            .ToList()
+        : availableParties;
 
     private double? EffectiveEscrutadoGeneral => currentSnapshot is null
         ? null
@@ -592,6 +652,7 @@
         FaldonMode.Sedes => "Sedes",
         FaldonMode.VideoPrime => "Vídeo / Prime",
         FaldonMode.Pactometro => "Pactómetro",
+        FaldonMode.UltimoEscano => "Último escaño",
         FaldonMode.CuentaAtras => "Cuenta Atrás",
         _ => mode.ToString()
     };
@@ -673,16 +734,34 @@
         selectedPartyCode = party.Codigo;
     }
 
+    private Task ToggleLeftPactPartySelection(PartidoSnapshot party) =>
+        TogglePactPartySelection(selectedLeftPactPartyCodes, party);
+
+    private Task ToggleRightPactPartySelection(PartidoSnapshot party) =>
+        TogglePactPartySelection(selectedRightPactPartyCodes, party);
+
+    private static Task TogglePactPartySelection(List<string> selection, PartidoSnapshot party)
+    {
+        var index = selection.FindIndex(code =>
+            string.Equals(code, party.Codigo, StringComparison.OrdinalIgnoreCase));
+        if (index >= 0)
+        {
+            selection.RemoveAt(index);
+        }
+        else
+        {
+            selection.Add(party.Codigo);
+        }
+
+        return Task.CompletedTask;
+    }
+
     private async Task OnPartyDoubleClickedAsync(PartidoSnapshot party)
     {
         selectedPartyCode = party.Codigo;
         if (activeMode == FaldonMode.Sedes)
         {
             await RunPartyCommandAsync(GraphicCommand.SedesEntra);
-        }
-        else if (activeMode == FaldonMode.Pactometro)
-        {
-            await AddLeftAsync();
         }
         else if (activeMode == FaldonMode.VideoPrime && videoSelectionMode == "party")
         {
@@ -755,6 +834,7 @@
                 .ThenByDescending(x => x.PorcentajeVoto)
                 .ThenByDescending(x => x.Votos)
                 .ToList();
+            SyncPactometerPartiesFromState();
 
             if (string.IsNullOrWhiteSpace(selectedPartyCode) || !availableParties.Any(p => string.Equals(p.Codigo, selectedPartyCode, StringComparison.OrdinalIgnoreCase)))
             {
@@ -774,6 +854,15 @@
 
     private async Task RunSceneActionAsync(OperationActionType action)
     {
+        if (activeMode == FaldonMode.UltimoEscano
+            && !moduleOficiales
+            && action != OperationActionType.Exit)
+        {
+            feedbackMessage = "El gráfico de Último escaño solo está disponible con datos Oficiales.";
+            feedbackIsError = true;
+            return;
+        }
+
         EnsureAutoLock();
         var request = new OperationRequest
         {
@@ -794,7 +883,12 @@
         feedbackIsError = !result.Success;
     }
 
-    private async Task<bool> RunCommandAsync(GraphicCommand command, string commandValue = "")
+    private async Task<bool> RunCommandAsync(
+        GraphicCommand command,
+        string commandValue = "",
+        IReadOnlyList<string>? partyCodes = null,
+        IReadOnlyList<string>? leftPartyCodes = null,
+        IReadOnlyList<string>? rightPartyCodes = null)
     {
         EnsureAutoLock();
         var request = new OperationRequest
@@ -806,6 +900,9 @@
             SceneSeconds = activeMode == FaldonMode.CuentaAtras && sceneSeconds > 0 ? sceneSeconds : null,
             Command = command,
             CommandValue = commandValue,
+            PartyCodes = partyCodes ?? [],
+            LeftPartyCodes = leftPartyCodes ?? [],
+            RightPartyCodes = rightPartyCodes ?? [],
             Target = globalSettings.Target,
             Oficiales = moduleOficiales,
             ExportName = globalSettings.ExportName,
@@ -839,65 +936,90 @@
         await RunCommandAsync(command, commandValue);
     }
 
-    private async Task EnterPactosAsync() => await RunCommandAsync(GraphicCommand.PactosEntra);
-
     private async Task ResetPactosAsync()
     {
         if (await RunCommandAsync(GraphicCommand.PactosReinicio))
         {
             leftParties.Clear();
             rightParties.Clear();
+            selectedLeftPactPartyCodes.Clear();
+            selectedRightPactPartyCodes.Clear();
         }
     }
 
-    private async Task ExitPactosAsync()
+    private async Task ApplyPactometerPartiesAsync(bool izquierda)
     {
-        if (await RunCommandAsync(GraphicCommand.PactosSale))
+        var command = izquierda
+            ? GraphicCommand.PactosEntraIzquierda
+            : GraphicCommand.PactosEntraDerecha;
+        var codes = (izquierda ? selectedLeftPactPartyCodes : selectedRightPactPartyCodes).ToArray();
+        if (codes.Length == 0 || !await RunCommandAsync(command, partyCodes: codes))
+        {
+            return;
+        }
+
+        var target = izquierda ? leftParties : rightParties;
+        target.Clear();
+        target.AddRange(codes
+            .Select(code => DisplayedParties.Concat(FullCircunscripcionParties)
+                .FirstOrDefault(p => string.Equals(p.Codigo, code, StringComparison.OrdinalIgnoreCase)))
+            .OfType<PartidoSnapshot>());
+    }
+
+    private async Task ApplyBothPactometerPartiesAsync()
+    {
+        var leftCodes = selectedLeftPactPartyCodes.ToArray();
+        var rightCodes = selectedRightPactPartyCodes.ToArray();
+        if (leftCodes.Length == 0
+            || rightCodes.Length == 0
+            || !await RunCommandAsync(
+            GraphicCommand.PactosEntraAmbos,
+            leftPartyCodes: leftCodes,
+            rightPartyCodes: rightCodes))
+        {
+            return;
+        }
+
+        ReplacePactometerParties(leftParties, leftCodes);
+        ReplacePactometerParties(rightParties, rightCodes);
+    }
+
+    private async Task ClearLeftAsync()
+    {
+        if (await RunCommandAsync(GraphicCommand.PactosSaleIzquierda))
         {
             leftParties.Clear();
+        }
+    }
+
+    private async Task ClearRightAsync()
+    {
+        if (await RunCommandAsync(GraphicCommand.PactosSaleDerecha))
+        {
             rightParties.Clear();
         }
     }
 
-    private async Task AddLeftAsync()
+    private void SyncPactometerPartiesFromState()
     {
-        if (SelectedParty is null || leftParties.Any(x => string.Equals(x.Codigo, SelectedParty.Codigo, StringComparison.OrdinalIgnoreCase)))
-        {
-            return;
-        }
-
-        if (await RunCommandAsync(GraphicCommand.PactosEntraIzquierda, SelectedParty.Codigo))
-        {
-            leftParties.Add(SelectedParty);
-        }
+        ReplacePactometerParties(leftParties, moduleState.PactosIzquierda);
+        ReplacePactometerParties(rightParties, moduleState.PactosDerecha);
     }
 
-    private async Task AddRightAsync()
+    private void ReplacePactometerParties(List<PartidoSnapshot> destination, IReadOnlyList<string> codes)
     {
-        if (SelectedParty is null || rightParties.Any(x => string.Equals(x.Codigo, SelectedParty.Codigo, StringComparison.OrdinalIgnoreCase)))
-        {
-            return;
-        }
+        var sourceParties = availableParties.Concat(FullCircunscripcionParties);
+        var partiesByCode = sourceParties
+            .GroupBy(p => p.Codigo, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
-        if (await RunCommandAsync(GraphicCommand.PactosEntraDerecha, SelectedParty.Codigo))
+        destination.Clear();
+        foreach (var code in codes)
         {
-            rightParties.Add(SelectedParty);
-        }
-    }
-
-    private async Task RemoveLeftAsync()
-    {
-        if (leftParties.Count > 0 && await RunCommandAsync(GraphicCommand.PactosSaleIzquierda))
-        {
-            leftParties.RemoveAt(leftParties.Count - 1);
-        }
-    }
-
-    private async Task RemoveRightAsync()
-    {
-        if (rightParties.Count > 0 && await RunCommandAsync(GraphicCommand.PactosSaleDerecha))
-        {
-            rightParties.RemoveAt(rightParties.Count - 1);
+            if (partiesByCode.TryGetValue(code, out var party))
+            {
+                destination.Add(party);
+            }
         }
     }
 
@@ -973,6 +1095,7 @@
             moduleElectionSlot = state.ElectionSlot;
             moduleOficiales = state.Oficiales;
             moduleLanguage = state.GraphicLanguage;
+            SyncPactometerPartiesFromState();
 
             if (slotChanged)
             {

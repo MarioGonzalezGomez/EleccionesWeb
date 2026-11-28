@@ -5,7 +5,8 @@ public enum CartonKind
     Participacion = 1,
     Mayorias = 2,
     Estatal = 3,
-    UltimoEscano = 4
+    UltimoEscano = 4,
+    Mapa = 5
 }
 
 public sealed record CartonCsvFileArtifact(
@@ -47,6 +48,7 @@ public static class CartonKindResolver
             "MAYORIAS" or "SONDEO_MAYORIAS" or "CCAA_CARTONES" => CartonKind.Mayorias,
             "ESTATAL" or "SONDEO_ESTATAL" or "CARTON_PARTIDOS" => CartonKind.Estatal,
             "ULTIMO_ESCANO" or "ULTIMOESCANO" => CartonKind.UltimoEscano,
+            "MAPA" or "MAPA_ESCANOS" => CartonKind.Mapa,
             _ => CartonKind.Participacion
         };
     }
@@ -57,6 +59,7 @@ public static class CartonKindResolver
         CartonKind.Mayorias => oficiales ? "MAYORIAS" : "SONDEO_MAYORIAS",
         CartonKind.Estatal => oficiales ? "ESTATAL" : "SONDEO_ESTATAL",
         CartonKind.UltimoEscano => "ULTIMOESCANO",
+        CartonKind.Mapa => "MAPA_ESCANOS",
         _ => "PARTICIPACION"
     };
 }
