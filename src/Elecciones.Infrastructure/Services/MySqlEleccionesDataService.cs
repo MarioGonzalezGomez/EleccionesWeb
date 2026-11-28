@@ -235,10 +235,7 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             {
                 var partidosProvincia = groupedByCirc.GetValueOrDefault(c.Codigo) ?? [];
                 var ultimoEscano = partidosProvincia.FirstOrDefault(x => x.EsUltimoEscano != 0);
-                var partidoEnDisputa = partidosProvincia.FirstOrDefault(x => x.LuchaUltimoEscano != 0);
-                var disputaCon = ultimoEscano is not null && partidoEnDisputa is not null
-                    ? partidoEnDisputa.CodPartido.Trim()
-                    : string.Empty;
+                var disputaCon = ResolveMapaEscanosDisputaCon(c, partidosProvincia);
 
                 return partidosProvincia
                     .Where(x => x.EscaniosHasta > 0
@@ -404,6 +401,23 @@ public sealed class MySqlEleccionesDataService : IEleccionesDataService
             .DistinctBy(x => x.Codigo, StringComparer.OrdinalIgnoreCase)
             .OrderBy(x => x.Codigo, StringComparer.Ordinal)
             .ToList();
+    }
+
+    internal static string ResolveMapaEscanosDisputaCon(
+        CircunscripcionEntity circunscripcion,
+        IReadOnlyList<CircunscripcionPartidoEntity> partidos)
+    {
+        var ultimoEscano = partidos.FirstOrDefault(x => x.EsUltimoEscano != 0);
+        var partidoEnDisputa = partidos.FirstOrDefault(x => x.LuchaUltimoEscano != 0);
+        if (ultimoEscano is null
+            || partidoEnDisputa is null
+            || string.IsNullOrWhiteSpace(partidoEnDisputa.CodPartido)
+            || partidoEnDisputa.Restos >= circunscripcion.VotantesFaltan * 0.025)
+        {
+            return string.Empty;
+        }
+
+        return partidoEnDisputa.CodPartido.Trim();
     }
 
     private static CircunscripcionPartidoEntity? ResolveValidMajorityWinner(

@@ -18,8 +18,10 @@ public sealed class DatabaseChangeListenerService
     private readonly IGlobalOperationalSettingsService? _globalSettings;
     private readonly IModuleLockService? _lockService;
     private readonly Dictionary<GraphicModule, (string ContextKey, string DataHash)> _lastHashes = new();
+    private readonly Dictionary<GraphicModule, PendingUpdate> _pendingUpdates = new();
 
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
+    public TimeSpan UltimoEscanoUpdateDebounceInterval { get; set; } = TimeSpan.FromSeconds(5);
 
     public DatabaseChangeListenerService(
         IOperationStateService stateService,
@@ -75,6 +77,11 @@ public sealed class DatabaseChangeListenerService
         var monitoredModules = states
             .Where(s => ShouldMonitorModule(s, isCartonOperatorActive))
             .ToList();
+        var monitoredModuleIds = monitoredModules.Select(s => s.Module).ToHashSet();
+        foreach (var module in _pendingUpdates.Keys.Where(m => !monitoredModuleIds.Contains(m)).ToList())
+        {
+            _pendingUpdates.Remove(module);
+        }
 
         if (monitoredModules.Count == 0)
         {
@@ -97,6 +104,7 @@ public sealed class DatabaseChangeListenerService
                     || !string.Equals(previous.ContextKey, contextKey, StringComparison.Ordinal))
                 {
                     _lastHashes[state.Module] = (contextKey, hash);
+                    _pendingUpdates.Remove(state.Module);
 
                     // Si hay operador de Cartones activo en un contexto nuevo, garantizamos los 5 ficheros CSV iniciales sincronizados
                     if (state.Module == GraphicModule.Carton && isCartonOperatorActive && !state.IsOnAir)
@@ -109,6 +117,27 @@ public sealed class DatabaseChangeListenerService
 
                 if (string.Equals(previous.DataHash, hash, StringComparison.Ordinal))
                 {
+                    if (_pendingUpdates.TryGetValue(state.Module, out var pendingUpdate))
+                    {
+                        if (!string.Equals(pendingUpdate.ContextKey, contextKey, StringComparison.Ordinal))
+                        {
+                            _pendingUpdates.Remove(state.Module);
+                        }
+                        else if (checkedAtUtc - pendingUpdate.LastChangedAtUtc >= UltimoEscanoUpdateDebounceInterval)
+                        {
+                            if (await DispatchUpdateSignalAsync(
+                                pendingUpdate.Request,
+                                pendingUpdate.Snapshot,
+                                cancellationToken))
+                            {
+                                dispatchedCount++;
+                                signalDispatchedModules.Add(state.Module);
+                            }
+
+                            _pendingUpdates.Remove(state.Module);
+                        }
+                    }
+
                     continue;
                 }
 
@@ -134,6 +163,7 @@ public sealed class DatabaseChangeListenerService
 
                 if (!state.IsOnAir)
                 {
+                    _pendingUpdates.Remove(state.Module);
                     csvUpdatedOffAirModules.Add(state.Module);
                     continue;
                 }
@@ -151,10 +181,19 @@ public sealed class DatabaseChangeListenerService
                     Query = query
                 };
 
-                var signal = _signalComposer.Compose(updateRequest, snapshot);
-                if (!string.IsNullOrWhiteSpace(signal))
+                if (ShouldDebounceUltimoEscanoUpdate(state)
+                    && UltimoEscanoUpdateDebounceInterval > TimeSpan.Zero)
                 {
-                    await _graphicsGateway.SendAsync(state.Target, signal, cancellationToken, state.Module);
+                    _pendingUpdates[state.Module] = new PendingUpdate(
+                        contextKey,
+                        checkedAtUtc,
+                        updateRequest,
+                        snapshot);
+                    continue;
+                }
+
+                if (await DispatchUpdateSignalAsync(updateRequest, snapshot, cancellationToken))
+                {
                     dispatchedCount++;
                     signalDispatchedModules.Add(state.Module);
                 }
@@ -202,6 +241,27 @@ public sealed class DatabaseChangeListenerService
         }
 
         return false;
+    }
+
+    private static bool ShouldDebounceUltimoEscanoUpdate(ModuleOperationalState state)
+    {
+        return state.Module == GraphicModule.Faldon
+            && string.Equals(state.ActiveScene, "SUPERFALDON_ULTIMOESCANO", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<bool> DispatchUpdateSignalAsync(
+        OperationRequest request,
+        BrainStormSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        var signal = _signalComposer.Compose(request, snapshot);
+        if (string.IsNullOrWhiteSpace(signal))
+        {
+            return false;
+        }
+
+        await _graphicsGateway.SendAsync(request.Target, signal, cancellationToken, request.Module);
+        return true;
     }
 
     private static SnapshotQuery BuildFallbackQuery(ModuleOperationalState state, GlobalOperationalSettings? global)
@@ -270,4 +330,10 @@ public sealed class DatabaseChangeListenerService
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
         return Convert.ToHexString(bytes);
     }
+
+    private sealed record PendingUpdate(
+        string ContextKey,
+        DateTimeOffset LastChangedAtUtc,
+        OperationRequest Request,
+        BrainStormSnapshot Snapshot);
 }

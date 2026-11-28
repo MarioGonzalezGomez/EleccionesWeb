@@ -199,10 +199,8 @@ public sealed class OperationStateAndListenerTests
         Assert.Contains("Escrutinio/Actualiza", fakeGateway.SentSignals[0]);
     }
 
-    [Theory]
-    [InlineData("Pactometro", "itemset('<{BD}>ACTUALIZAR','EVENT_RUN');")]
-    [InlineData("SUPERFALDON_ULTIMOESCANO", "itemset('<{BD}>SUPERFALDON_ULTIMOESCANO/ACTUALIZA','EVENT_RUN');")]
-    public async Task DatabaseChangeListener_FaldonChartsSendTheirRefreshEventWhenOnAir(string scene, string expectedEvent)
+    [Fact]
+    public async Task DatabaseChangeListener_PactometroSendsItsRefreshEventWhenOnAir()
     {
         var stateService = new OperationStateService();
         var initialSnapshot = TestSnapshotFactory.CreateSampleSnapshot();
@@ -213,7 +211,7 @@ public sealed class OperationStateAndListenerTests
         {
             OperatorId = "op1",
             Module = GraphicModule.Faldon,
-            Scene = scene,
+            Scene = "Pactometro",
             Action = OperationActionType.Enter,
             Oficiales = true,
             Query = new SnapshotQuery
@@ -236,7 +234,60 @@ public sealed class OperationStateAndListenerTests
         fakeData.CurrentSnapshot = initialSnapshot with { Escrutado = 91.20 };
 
         Assert.Equal(1, await listener.CheckAndDispatchUpdatesOnceAsync());
-        Assert.Contains(expectedEvent, Assert.Single(fakeGateway.SentSignals));
+        Assert.Contains("itemset('<{BD}>ACTUALIZAR','EVENT_RUN');", Assert.Single(fakeGateway.SentSignals));
+    }
+
+    [Fact]
+    public async Task DatabaseChangeListener_UltimoEscanoDebouncesSeveralChangesIntoOneRefresh()
+    {
+        var stateService = new OperationStateService();
+        var initialSnapshot = TestSnapshotFactory.CreateSampleSnapshot();
+        var fakeData = new MutableFakeDataService(initialSnapshot);
+        var fakeGateway = new FakeGraphicsGateway();
+
+        stateService.RecordExecution(new OperationRequest
+        {
+            OperatorId = "op1",
+            Module = GraphicModule.Faldon,
+            Scene = "SUPERFALDON_ULTIMOESCANO",
+            Action = OperationActionType.Enter,
+            Oficiales = true,
+            Query = new SnapshotQuery
+            {
+                Kind = SnapshotQueryKind.Circunscripcion,
+                CircunscripcionCodigo = "9900000",
+                Avance = 1
+            }
+        }, initialSnapshot);
+
+        var listener = new DatabaseChangeListenerService(
+            stateService,
+            fakeData,
+            new FakeCsvWriter(),
+            new DefaultSignalComposer(),
+            fakeGateway,
+            NullLogger<DatabaseChangeListenerService>.Instance)
+        {
+            UltimoEscanoUpdateDebounceInterval = TimeSpan.FromMilliseconds(30)
+        };
+
+        Assert.Equal(0, await listener.CheckAndDispatchUpdatesOnceAsync());
+
+        fakeData.CurrentSnapshot = initialSnapshot with { Escrutado = 91.20 };
+        Assert.Equal(0, await listener.CheckAndDispatchUpdatesOnceAsync());
+        Assert.Empty(fakeGateway.SentSignals);
+
+        fakeData.CurrentSnapshot = initialSnapshot with { Escrutado = 92.40 };
+        Assert.Equal(0, await listener.CheckAndDispatchUpdatesOnceAsync());
+        Assert.Empty(fakeGateway.SentSignals);
+
+        await Task.Delay(listener.UltimoEscanoUpdateDebounceInterval + TimeSpan.FromMilliseconds(20));
+        Assert.Equal(1, await listener.CheckAndDispatchUpdatesOnceAsync());
+
+        Assert.Contains(
+            "itemset('<{BD}>SUPERFALDON_ULTIMOESCANO/ACTUALIZA','EVENT_RUN');",
+            Assert.Single(fakeGateway.SentSignals));
+        Assert.Equal(0, await listener.CheckAndDispatchUpdatesOnceAsync());
     }
 
     [Fact]

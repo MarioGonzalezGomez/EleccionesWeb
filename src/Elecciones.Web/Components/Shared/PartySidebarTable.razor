@@ -139,7 +139,7 @@
                                 </div>
                             </td>
                             <td class="text-end ws-mono ws-party-seats">
-                                @if (!Oficiales && party.EscaniosDesdeSondeo != party.EscaniosHastaSondeo && party.EscaniosDesdeSondeo > 0)
+                                @if (!Oficiales && party.EscaniosDesdeSondeo != party.EscaniosHastaSondeo)
                                 {
                                     <span class="text-muted">@party.EscaniosDesdeSondeo–</span><span>@party.EscaniosHastaSondeo</span>
                                 }
